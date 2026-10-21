@@ -49,7 +49,19 @@ public class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText("🎙️ TALK TO JARVIS");
         layout.addView(button);
-
+EditText chatInput = new EditText(this);
+        chatInput.setHint("Ask JARVIS anything...");
+        layout.addView(chatInput);
+        Button sendButton = new Button(this);
+        sendButton.setText("SEND");
+        layout.addView(sendButton);
+        sendButton.setOnClickListener(v -> {
+    String message = chatInput.getText().toString().trim();
+    if (!message.isEmpty()) {
+        processCommand(message.toLowerCase());
+        chatInput.setText("");
+    }
+});
         setContentView(layout);
 
         tts = new TextToSpeech(this, result -> {
