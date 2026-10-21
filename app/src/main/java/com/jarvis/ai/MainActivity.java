@@ -14,6 +14,7 @@ import android.net.Uri;
 
 import java.util.ArrayList;
 import java.util.Locale;
+import android.widget.EditText;
 
 public class MainActivity extends Activity {
 
