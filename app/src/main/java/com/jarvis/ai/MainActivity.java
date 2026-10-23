@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
         layout.addView(button);
 EditText chatInput = new EditText(this);
         chatInput.setHint("Ask JARVIS anything...");
+        chatInput.setTextColor(Color.WHITE);
+chatInput.setHintTextColor(Color.GRAY);
         layout.addView(chatInput);
         Button sendButton = new Button(this);
         sendButton.setText("SEND");
