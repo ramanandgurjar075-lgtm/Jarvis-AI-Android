@@ -30,7 +30,7 @@ public class MainActivity extends Activity {
     private TextToSpeech tts;
 
     private static final int VOICE_REQUEST = 100;
-    private static final String MODEL = "gemini-2.5-flash";
+    private static final String MODEL = "gemini-3.8-flash";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
