@@ -13,7 +13,14 @@ import android.speech.tts.TextToSpeech;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.MotionEvent;
+import android.view.animation.AlphaAnimation;
 import android.widget.*;
+import android.animation.ObjectAnimator;
+import android.animation.AnimatorSet;
+import android.animation.ValueAnimator;
+import android.util.TypedValue;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -29,23 +36,25 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
 
-    private static final String MODEL = "gemini-3.1-flash-lite";
+    private static final String MODEL =
+        "gemini-3.1-flash-lite";
+
     private static final int VOICE_REQUEST = 101;
 
-    private final int BG = Color.rgb(5, 10, 20);
-    private final int CARD = Color.rgb(18, 28, 45);
-    private final int CYAN = Color.rgb(0, 220, 255);
+    private final int BG = Color.rgb(5, 9, 18);
+    private final int CARD = Color.rgb(20, 29, 45);
+    private final int CYAN = Color.rgb(0, 215, 255);
     private final int WHITE = Color.WHITE;
-    private final int GRAY = Color.rgb(155, 170, 190);
+    private final int GRAY = Color.rgb(150, 160, 180);
 
     private SharedPreferences prefs;
 
+    private FrameLayout screen;
     private LinearLayout root;
     private LinearLayout messages;
-    private ScrollView scroll;
+    private ScrollView chatScroll;
     private EditText input;
     private TextView sendButton;
-    private TextView modeButton;
 
     private JSONArray history = new JSONArray();
     private JSONArray workspaces = new JSONArray();
@@ -56,16 +65,28 @@ public class MainActivity extends Activity {
 
     private boolean busy = false;
     private boolean voiceReply = false;
+    private boolean sidebarOpen = false;
+
+    private int requestToken = 0;
 
     private Thread requestThread;
     private HttpURLConnection activeConnection;
     private TextToSpeech tts;
 
-    private int requestToken = 0;
+    private LinearLayout sidebar;
+    private View sidebarShade;
+
+    private int dp(float value) {
+        return (int) TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value,
+            getResources().getDisplayMetrics()
+        );
+    }
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
 
         prefs = getSharedPreferences(
             "jarvis_private",
@@ -91,14 +112,31 @@ public class MainActivity extends Activity {
         showHome();
     }
 
-    private GradientDrawable shape(int color, int radius) {
+    private GradientDrawable shape(
+        int color,
+        int radius
+    ) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(color);
-        d.setCornerRadius(radius);
+        d.setCornerRadius(dp(radius));
         return d;
     }
 
-    private TextView label(String value, int size, int color) {
+    private GradientDrawable glowingShape() {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+
+        d.setColor(Color.rgb(3, 30, 48));
+        d.setStroke(dp(3), CYAN);
+
+        return d;
+    }
+
+    private TextView text(
+        String value,
+        int size,
+        int color
+    ) {
         TextView t = new TextView(this);
         t.setText(value);
         t.setTextSize(size);
@@ -106,11 +144,14 @@ public class MainActivity extends Activity {
         return t;
     }
 
-    private TextView button(String value) {
-        TextView b = label(value, 16, WHITE);
+    private TextView iconButton(String value) {
+        TextView b = text(value, 21, WHITE);
         b.setGravity(Gravity.CENTER);
-        b.setPadding(20, 14, 20, 14);
-        b.setBackground(shape(CARD, 25));
+
+        b.setBackground(
+            shape(CARD, 25)
+        );
+
         return b;
     }
 
@@ -127,45 +168,92 @@ public class MainActivity extends Activity {
         return l;
     }
 
-    private void setupRoot() {
+    private void setupScreen() {
+        screen = new FrameLayout(this);
+        screen.setBackgroundColor(BG);
+
         root = vertical();
-        root.setBackgroundColor(BG);
-        setContentView(root);
+
+        screen.addView(
+            root,
+            new FrameLayout.LayoutParams(
+                -1,
+                -1
+            )
+        );
+
+        setContentView(screen);
     }
 
     private void showHome() {
-        setupRoot();
+        sidebarOpen = false;
+        setupScreen();
 
         LinearLayout header = horizontal();
-        header.setPadding(12, 15, 12, 10);
-
-        TextView menu = button("☰");
-        header.addView(menu);
-
-        menu.setOnClickListener(v -> showMainMenu());
-
-        TextView title = label("  J.A.R.V.I.S", 23, CYAN);
-        title.setTypeface(null, Typeface.BOLD);
-
-        header.addView(
-            title,
-            new LinearLayout.LayoutParams(0, -2, 1)
+        header.setPadding(
+            dp(12),
+            dp(10),
+            dp(12),
+            dp(10)
         );
 
-        TextView newChat = button("＋");
-        header.addView(newChat);
+        TextView menu = iconButton("☰");
 
-        newChat.setOnClickListener(v -> newWorkspace());
+        header.addView(
+            menu,
+            new LinearLayout.LayoutParams(
+                dp(46),
+                dp(46)
+            )
+        );
+
+        menu.setOnClickListener(v -> openSidebar());
+
+        TextView title = text(
+            "J.A.R.V.I.S",
+            19,
+            CYAN
+        );
+
+        title.setTypeface(null, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout.LayoutParams titleParams =
+            new LinearLayout.LayoutParams(
+                0,
+                dp(46),
+                1
+            );
+
+        titleParams.leftMargin = dp(14);
+        header.addView(title, titleParams);
+
+        TextView newChat = iconButton("＋");
+
+        header.addView(
+            newChat,
+            new LinearLayout.LayoutParams(
+                dp(46),
+                dp(46)
+            )
+        );
+
+        newChat.setOnClickListener(v -> newChat());
 
         root.addView(header);
 
         LinearLayout info = horizontal();
-        info.setPadding(16, 0, 16, 12);
+        info.setPadding(
+            dp(18),
+            0,
+            dp(18),
+            dp(8)
+        );
 
-        TextView project = label(
+        TextView project = text(
             "📁 " + workspaceName,
-            14,
-            WHITE
+            13,
+            GRAY
         );
 
         project.setSingleLine(true);
@@ -175,31 +263,58 @@ public class MainActivity extends Activity {
 
         info.addView(
             project,
-            new LinearLayout.LayoutParams(0, -2, 1)
+            new LinearLayout.LayoutParams(
+                0,
+                -2,
+                1
+            )
         );
 
-        project.setOnClickListener(v -> showWorkspaces());
+        project.setOnClickListener(v -> openSidebar());
 
-        modeButton = button("⚡ " + mode);
-        modeButton.setTextColor(CYAN);
+        TextView modeView = text(
+            "◉ " + mode + "  ⌄",
+            13,
+            CYAN
+        );
 
-        info.addView(modeButton);
+        modeView.setPadding(
+            dp(12),
+            dp(8),
+            dp(12),
+            dp(8)
+        );
 
-        modeButton.setOnClickListener(v -> selectMode());
+        modeView.setBackground(shape(CARD, 18));
+
+        info.addView(modeView);
+
+        modeView.setOnClickListener(v -> selectMode());
 
         root.addView(info);
 
-        scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
+        chatScroll = new ScrollView(this);
+        chatScroll.setFillViewport(true);
+        chatScroll.setClipToPadding(false);
 
         messages = vertical();
-        messages.setPadding(16, 15, 16, 30);
 
-        scroll.addView(messages);
+        messages.setPadding(
+            dp(14),
+            dp(12),
+            dp(14),
+            dp(16)
+        );
+
+        chatScroll.addView(messages);
 
         root.addView(
-            scroll,
-            new LinearLayout.LayoutParams(-1, 0, 1)
+            chatScroll,
+            new LinearLayout.LayoutParams(
+                -1,
+                0,
+                1
+            )
         );
 
         if (history.length() == 0) {
@@ -208,15 +323,191 @@ public class MainActivity extends Activity {
             renderHistory();
         }
 
-        LinearLayout composer = vertical();
-        composer.setPadding(12, 10, 12, 15);
-        composer.setBackground(shape(CARD, 25));
+        createComposer();
+    }
+
+    private void showWelcome() {
+        FrameLayout center = new FrameLayout(this);
+
+        LinearLayout.LayoutParams areaParams =
+            new LinearLayout.LayoutParams(
+                -1,
+                0,
+                1
+            );
+
+        messages.addView(center, areaParams);
+
+        LinearLayout content = vertical();
+        content.setGravity(Gravity.CENTER);
+
+        FrameLayout.LayoutParams cp =
+            new FrameLayout.LayoutParams(
+                -1,
+                -2,
+                Gravity.CENTER
+            );
+
+        center.addView(content, cp);
+
+        FrameLayout coreContainer =
+            new FrameLayout(this);
+
+        LinearLayout.LayoutParams coreParams =
+            new LinearLayout.LayoutParams(
+                dp(115),
+                dp(115)
+            );
+
+        coreParams.gravity = Gravity.CENTER;
+        content.addView(coreContainer, coreParams);
+
+        View glow = new View(this);
+        glow.setBackground(glowingShape());
+
+        FrameLayout.LayoutParams glowParams =
+            new FrameLayout.LayoutParams(
+                dp(88),
+                dp(88),
+                Gravity.CENTER
+            );
+
+        coreContainer.addView(glow, glowParams);
+
+        TextView coreSymbol = text(
+            "⬡",
+            73,
+            CYAN
+        );
+
+        coreSymbol.setGravity(Gravity.CENTER);
+
+        coreContainer.addView(
+            coreSymbol,
+            new FrameLayout.LayoutParams(
+                -1,
+                -1
+            )
+        );
+
+        ObjectAnimator pulseX =
+            ObjectAnimator.ofFloat(
+                glow,
+                "scaleX",
+                0.85f,
+                1.15f
+            );
+
+        ObjectAnimator pulseY =
+            ObjectAnimator.ofFloat(
+                glow,
+                "scaleY",
+                0.85f,
+                1.15f
+            );
+
+        ObjectAnimator alpha =
+            ObjectAnimator.ofFloat(
+                glow,
+                "alpha",
+                0.35f,
+                1f
+            );
+
+        pulseX.setRepeatCount(
+            ValueAnimator.INFINITE
+        );
+
+        pulseY.setRepeatCount(
+            ValueAnimator.INFINITE
+        );
+
+        alpha.setRepeatCount(
+            ValueAnimator.INFINITE
+        );
+
+        pulseX.setRepeatMode(
+            ValueAnimator.REVERSE
+        );
+
+        pulseY.setRepeatMode(
+            ValueAnimator.REVERSE
+        );
+
+        alpha.setRepeatMode(
+            ValueAnimator.REVERSE
+        );
+
+        AnimatorSet animation = new AnimatorSet();
+
+        animation.playTogether(
+            pulseX,
+            pulseY,
+            alpha
+        );
+
+        animation.setDuration(1800);
+        animation.start();
+
+        coreContainer.setOnClickListener(v -> startVoice());
+
+        TextView greeting = text(
+            "How can I help you?",
+            22,
+            WHITE
+        );
+
+        greeting.setTypeface(null, Typeface.BOLD);
+        greeting.setGravity(Gravity.CENTER);
+
+        greeting.setPadding(
+            0,
+            dp(20),
+            0,
+            dp(8)
+        );
+
+        content.addView(greeting);
+
+        TextView subtitle = text(
+            "Your personal AI assistant",
+            14,
+            GRAY
+        );
+
+        subtitle.setGravity(Gravity.CENTER);
+        content.addView(subtitle);
+    }
+
+    private void createComposer() {
+        LinearLayout outer = vertical();
+
+        outer.setPadding(
+            dp(10),
+            dp(8),
+            dp(10),
+            dp(12)
+        );
+
+        LinearLayout box = vertical();
+        box.setBackground(shape(CARD, 26));
+
+        box.setPadding(
+            dp(10),
+            dp(5),
+            dp(10),
+            dp(5)
+        );
 
         input = new EditText(this);
+
         input.setHint("Message JARVIS...");
         input.setHintTextColor(GRAY);
         input.setTextColor(WHITE);
+
         input.setTextSize(16);
+        input.setBackgroundColor(Color.TRANSPARENT);
+
         input.setMinLines(1);
         input.setMaxLines(4);
 
@@ -225,184 +516,141 @@ public class MainActivity extends Activity {
             InputType.TYPE_TEXT_FLAG_MULTI_LINE
         );
 
-        composer.addView(input);
+        box.addView(input);
 
         LinearLayout controls = horizontal();
 
-        TextView attach = button("＋");
-        controls.addView(attach);
+        TextView attach = iconButton("＋");
+
+        controls.addView(
+            attach,
+            new LinearLayout.LayoutParams(
+                dp(44),
+                dp(44)
+            )
+        );
+
         attach.setOnClickListener(v -> showAttachments());
 
-        TextView spacer = label("", 12, WHITE);
+        View spacer = new View(this);
 
         controls.addView(
             spacer,
-            new LinearLayout.LayoutParams(0, 1, 1)
+            new LinearLayout.LayoutParams(
+                0,
+                dp(1),
+                1
+            )
         );
 
-        TextView mic = button("🎙");
-        controls.addView(mic);
+        TextView mic = iconButton("🎙");
+
+        controls.addView(
+            mic,
+            new LinearLayout.LayoutParams(
+                dp(44),
+                dp(44)
+            )
+        );
 
         mic.setOnClickListener(v -> startVoice());
 
-        sendButton = button("➤");
+        sendButton = iconButton("➤");
         sendButton.setTextColor(CYAN);
 
-        controls.addView(sendButton);
+        controls.addView(
+            sendButton,
+            new LinearLayout.LayoutParams(
+                dp(58),
+                dp(44)
+            )
+        );
 
         sendButton.setOnClickListener(v -> {
             if (busy) {
                 stopRequest();
             } else {
-                String msg = input.getText().toString().trim();
+                String message =
+                    input.getText().toString().trim();
 
-                if (!msg.isEmpty()) {
-                    input.setText("");
+                if (!message.isEmpty()) {
                     voiceReply = false;
-                    sendMessage(msg);
+                    input.setText("");
+                    sendMessage(message);
                 }
             }
         });
 
-        composer.addView(controls);
-        root.addView(composer);
-    }
-
-    private void showWelcome() {
-        LinearLayout welcome = vertical();
-        welcome.setGravity(Gravity.CENTER);
-        welcome.setPadding(10, 65, 10, 35);
-
-        TextView core = label("⬡", 110, CYAN);
-        core.setGravity(Gravity.CENTER);
-        welcome.addView(core);
-
-        TextView title = label(
-            "J.A.R.V.I.S  V3",
-            28,
-            CYAN
-        );
-
-        title.setTypeface(null, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER);
-
-        welcome.addView(title);
-
-        TextView subtitle = label(
-            "Your Personal AI Assistant\nWhat shall we create today?",
-            17,
-            WHITE
-        );
-
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, 20, 0, 25);
-
-        welcome.addView(subtitle);
-        messages.addView(welcome);
-
-        suggestion("🎬 Create AI Video");
-        suggestion("🎨 Create Images");
-        suggestion("📱 Create Android App");
-        suggestion("🎮 Create Game");
-    }
-
-    private void suggestion(String text) {
-        TextView b = button(text);
-        b.setGravity(Gravity.LEFT);
-
-        LinearLayout.LayoutParams p =
-            new LinearLayout.LayoutParams(-1, -2);
-
-        p.setMargins(0, 5, 0, 5);
-        messages.addView(b, p);
-
-        b.setOnClickListener(v -> {
-            String prompt = text.substring(
-                text.indexOf(" ") + 1
-            );
-
-            voiceReply = false;
-            sendMessage(prompt);
-        });
+        box.addView(controls);
+        outer.addView(box);
+        root.addView(outer);
     }
 
     private void addBubble(
         String value,
-        boolean isUser,
-        int historyIndex
+        boolean user,
+        int index
     ) {
-        LinearLayout holder = horizontal();
+        LinearLayout line = horizontal();
 
-        holder.setGravity(
-            isUser ? Gravity.RIGHT : Gravity.LEFT
+        line.setGravity(
+            user ? Gravity.RIGHT : Gravity.LEFT
         );
 
-        TextView bubble = label(value, 16, WHITE);
+        TextView bubble = text(
+            value,
+            16,
+            WHITE
+        );
 
-        bubble.setPadding(17, 14, 17, 14);
         bubble.setTextIsSelectable(true);
+
+        bubble.setPadding(
+            dp(14),
+            dp(12),
+            dp(14),
+            dp(12)
+        );
 
         bubble.setBackground(
             shape(
-                isUser
-                    ? Color.rgb(0, 80, 115)
+                user
+                    ? Color.rgb(0, 70, 105)
                     : CARD,
-                22
+                20
             )
         );
 
         LinearLayout.LayoutParams p =
-            new LinearLayout.LayoutParams(-2, -2);
+            new LinearLayout.LayoutParams(
+                -2,
+                -2
+            );
 
-        p.setMargins(0, 7, 0, 7);
+        p.setMargins(
+            0,
+            dp(5),
+            0,
+            dp(5)
+        );
 
-        holder.addView(bubble, p);
-        messages.addView(holder);
+        line.addView(bubble, p);
 
-        if (isUser && historyIndex >= 0) {
+        messages.addView(line);
+
+        if (user && index >= 0) {
             bubble.setOnLongClickListener(v -> {
-                showEditMessage(historyIndex);
+                editMessage(index);
                 return true;
             });
         }
 
-        scroll.post(() ->
-            scroll.fullScroll(View.FOCUS_DOWN)
+        chatScroll.post(() ->
+            chatScroll.fullScroll(View.FOCUS_DOWN)
         );
     }
 
-    private void renderHistory() {
-        for (int i = 0; i < history.length(); i++) {
-            JSONObject item = history.optJSONObject(i);
-
-            if (item == null) continue;
-
-            String role = item.optString("role");
-            String value = getMessageText(item);
-
-            addBubble(
-                value,
-                role.equals("user"),
-                role.equals("user") ? i : -1
-            );
-        }
-    }
-
-    private String getMessageText(JSONObject item) {
-        JSONArray parts = item.optJSONArray("parts");
-
-        if (parts == null || parts.length() == 0) {
-            return "";
-        }
-
-        JSONObject part = parts.optJSONObject(0);
-
-        return part == null
-            ? ""
-            : part.optString("text");
-    }
-
-    private JSONObject createMessage(
+    private JSONObject makeMessage(
         String role,
         String value
     ) {
@@ -423,9 +671,39 @@ public class MainActivity extends Activity {
         return item;
     }
 
-    private void addHistory(String role, String value) {
-        history.put(createMessage(role, value));
-        saveHistory();
+    private String messageText(JSONObject item) {
+        if (item == null) return "";
+
+        JSONArray parts = item.optJSONArray("parts");
+
+        if (parts == null ||
+            parts.length() == 0) {
+            return "";
+        }
+
+        JSONObject part = parts.optJSONObject(0);
+
+        return part == null
+            ? ""
+            : part.optString("text");
+    }
+
+    private void renderHistory() {
+        for (int i = 0; i < history.length(); i++) {
+            JSONObject item =
+                history.optJSONObject(i);
+
+            if (item == null) continue;
+
+            boolean user =
+                item.optString("role").equals("user");
+
+            addBubble(
+                messageText(item),
+                user,
+                user ? i : -1
+            );
+        }
     }
 
     private void saveHistory() {
@@ -450,47 +728,62 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showEditMessage(int index) {
+    private void addHistory(
+        String role,
+        String value
+    ) {
+        history.put(makeMessage(role, value));
+        saveHistory();
+    }
+
+    private void editMessage(int index) {
         if (busy) {
-            Toast.makeText(
-                this,
-                "Stop the current response first",
-                Toast.LENGTH_SHORT
-            ).show();
+            toast("Stop the current response first");
             return;
         }
 
-        JSONObject item = history.optJSONObject(index);
+        JSONObject old =
+            history.optJSONObject(index);
 
-        if (item == null) return;
+        if (old == null) return;
 
         EditText editor = new EditText(this);
-        editor.setText(getMessageText(item));
+
+        editor.setText(messageText(old));
         editor.setMinLines(2);
 
         new AlertDialog.Builder(this)
-            .setTitle("✏ Edit & Resend")
+            .setTitle("✏ Edit Message")
             .setView(editor)
-            .setPositiveButton("Resend", (d, w) -> {
-                String edited =
-                    editor.getText().toString().trim();
+            .setPositiveButton(
+                "Save & Resend",
+                (d, w) -> {
+                    String changed =
+                        editor.getText()
+                            .toString()
+                            .trim();
 
-                if (edited.isEmpty()) return;
+                    if (changed.isEmpty()) return;
 
-                JSONArray updated = new JSONArray();
+                    JSONArray revised =
+                        new JSONArray();
 
-                for (int i = 0; i < index; i++) {
-                    updated.put(
-                        history.optJSONObject(i)
-                    );
+                    for (int i = 0; i < index; i++) {
+                        JSONObject item =
+                            history.optJSONObject(i);
+
+                        if (item != null) {
+                            revised.put(item);
+                        }
+                    }
+
+                    history = revised;
+                    saveHistory();
+
+                    showHome();
+                    sendMessage(changed);
                 }
-
-                history = updated;
-                saveHistory();
-
-                showHome();
-                sendMessage(edited);
-            })
+            )
             .setNegativeButton("Cancel", null)
             .show();
     }
@@ -504,14 +797,8 @@ public class MainActivity extends Activity {
         );
 
         if (key.isEmpty()) {
+            toast("Save your Gemini API key first");
             showSettings();
-
-            Toast.makeText(
-                this,
-                "Save your Gemini API key first",
-                Toast.LENGTH_LONG
-            ).show();
-
             return;
         }
 
@@ -520,9 +807,9 @@ public class MainActivity extends Activity {
         }
 
         busy = true;
-        sendButton.setText("■ STOP");
+        sendButton.setText("■");
 
-        final boolean shouldSpeak = voiceReply;
+        boolean shouldSpeak = voiceReply;
         voiceReply = false;
 
         int index = history.length();
@@ -530,11 +817,14 @@ public class MainActivity extends Activity {
         addHistory("user", message);
         addBubble(message, true, index);
 
-        addBubble("◌ JARVIS is thinking...", false, -1);
+        addBubble(
+            "JARVIS is thinking...",
+            false,
+            -1
+        );
 
         final int token = ++requestToken;
         final String selectedMode = mode;
-
         final String requestHistory = history.toString();
 
         requestThread = new Thread(() -> {
@@ -546,7 +836,6 @@ public class MainActivity extends Activity {
                     selectedMode,
                     requestHistory
                 );
-
             } catch (Exception e) {
                 answer = "Connection problem: "
                     + e.getMessage();
@@ -555,7 +844,9 @@ public class MainActivity extends Activity {
             final String result = answer;
 
             runOnUiThread(() -> {
-                if (token != requestToken) return;
+                if (token != requestToken) {
+                    return;
+                }
 
                 busy = false;
                 sendButton.setText("➤");
@@ -589,7 +880,7 @@ public class MainActivity extends Activity {
                             spoken,
                             TextToSpeech.QUEUE_FLUSH,
                             null,
-                            "jarvis"
+                            "jarvis_voice"
                         );
                     }
                 }
@@ -602,12 +893,11 @@ public class MainActivity extends Activity {
     private void stopRequest() {
         if (!busy) return;
 
-        ++requestToken;
+        requestToken++;
         busy = false;
 
         if (activeConnection != null) {
             activeConnection.disconnect();
-            activeConnection = null;
         }
 
         if (requestThread != null) {
@@ -626,7 +916,11 @@ public class MainActivity extends Activity {
             );
         }
 
-        addBubble("■ Response stopped.", false, -1);
+        addBubble(
+            "■ Response stopped.",
+            false,
+            -1
+        );
     }
 
     private String callGemini(
@@ -664,67 +958,63 @@ public class MainActivity extends Activity {
             );
 
             String instruction =
-                "You are JARVIS, an advanced personal AI assistant. "
+                "You are JARVIS, a highly capable "
+                + "personal AI assistant. "
                 + "Understand Hindi, Hinglish and English. "
                 + "Reply naturally in the user's language. "
-                + "Be accurate, practical and conversational. "
-                + "Do not flatter the user or blindly agree. "
-                + "Politely correct mistakes and explain why. "
+                + "Be helpful, accurate and practical. "
+                + "Do not blindly agree or flatter. "
+                + "Politely correct incorrect claims. "
                 + "Keep normal replies concise. "
-                + "Give detailed steps when requested. "
-                + "Remember the conversation context provided. "
-                + "Help with coding, Android apps, games, "
-                + "image prompts, video scripts and planning. "
-                + "Never pretend that you created files, "
-                + "images, videos or apps when you did not. "
-                + "Prefer free tools where practical. ";
+                + "Explain step by step when requested. "
+                + "Use earlier conversation as context. "
+                + "Help with apps, games, coding, "
+                + "stories, images, video planning "
+                + "and technical problems. "
+                + "Never claim to have completed "
+                + "actions that were not performed. ";
 
             if (selectedMode.equals("DEEP")) {
                 instruction +=
-                    "Think carefully about complex problems. "
-                    + "Compare alternatives and explain tradeoffs. ";
+                    "Analyze complex problems carefully. "
+                    + "Compare options and limitations. ";
             }
 
             if (selectedMode.equals("TRUTH")) {
                 instruction +=
-                    "Prioritize factual accuracy. "
-                    + "Check reasoning for contradictions. "
-                    + "Clearly distinguish verified facts "
-                    + "from assumptions and uncertainty. "
-                    + "Do not invent sources or claim "
-                    + "to have verified facts externally. ";
+                    "Prioritize accuracy. "
+                    + "Check your reasoning for errors. "
+                    + "State uncertainty clearly. "
+                    + "Never invent citations or "
+                    + "pretend to verify external sources. ";
             }
 
             JSONObject body = new JSONObject();
 
             JSONObject system = new JSONObject();
-            JSONObject systemPart = new JSONObject();
+            JSONObject part = new JSONObject();
 
-            systemPart.put("text", instruction);
+            part.put("text", instruction);
 
             JSONArray systemParts = new JSONArray();
-            systemParts.put(systemPart);
+            systemParts.put(part);
 
             system.put("parts", systemParts);
 
             body.put("systemInstruction", system);
 
-            JSONArray allHistory =
+            JSONArray all =
                 new JSONArray(requestHistory);
 
             JSONArray recent = new JSONArray();
 
             int start = Math.max(
                 0,
-                allHistory.length() - 30
+                all.length() - 30
             );
 
-            for (int i = start;
-                 i < allHistory.length();
-                 i++) {
-
-                JSONObject item =
-                    allHistory.optJSONObject(i);
+            for (int i = start; i < all.length(); i++) {
+                JSONObject item = all.optJSONObject(i);
 
                 if (item != null) {
                     recent.put(item);
@@ -746,8 +1036,10 @@ public class MainActivity extends Activity {
                 body.put("generationConfig", config);
             }
 
-            byte[] data = body.toString()
-                .getBytes(StandardCharsets.UTF_8);
+            byte[] data =
+                body.toString().getBytes(
+                    StandardCharsets.UTF_8
+                );
 
             try (OutputStream out =
                      conn.getOutputStream()) {
@@ -788,14 +1080,14 @@ public class MainActivity extends Activity {
                 JSONObject error =
                     json.optJSONObject("error");
 
-                String errorText = error == null
+                String detail = error == null
                     ? response
                     : error.optString("message");
 
                 return "Gemini error: HTTP "
                     + status
                     + "\n"
-                    + errorText;
+                    + detail;
             }
 
             JSONArray candidates =
@@ -803,7 +1095,6 @@ public class MainActivity extends Activity {
 
             if (candidates == null ||
                 candidates.length() == 0) {
-
                 return "Gemini error: No response.";
             }
 
@@ -811,7 +1102,9 @@ public class MainActivity extends Activity {
                 candidates.optJSONObject(0);
 
             JSONObject content =
-                candidate.optJSONObject("content");
+                candidate == null
+                    ? null
+                    : candidate.optJSONObject("content");
 
             if (content == null) {
                 return "Gemini error: Empty content.";
@@ -827,18 +1120,18 @@ public class MainActivity extends Activity {
             StringBuilder answer = new StringBuilder();
 
             for (int i = 0; i < parts.length(); i++) {
-                JSONObject part = parts.optJSONObject(i);
+                JSONObject p = parts.optJSONObject(i);
 
-                if (part == null) continue;
+                if (p == null) continue;
 
-                String text = part.optString("text");
+                String value = p.optString("text");
 
-                if (!text.isEmpty()) {
+                if (!value.isEmpty()) {
                     if (answer.length() > 0) {
                         answer.append("\n");
                     }
 
-                    answer.append(text);
+                    answer.append(value);
                 }
             }
 
@@ -873,6 +1166,9 @@ public class MainActivity extends Activity {
             try {
                 first.put("id", "default");
                 first.put("name", "My Chat");
+                first.put("pinned", false);
+                first.put("archived", false);
+
                 workspaces.put(first);
 
             } catch (Exception ignored) {}
@@ -900,8 +1196,14 @@ public class MainActivity extends Activity {
         }
 
         if (!found) {
-            workspaceId = "default";
-            workspaceName = "My Chat";
+            JSONObject first =
+                workspaces.optJSONObject(0);
+
+            if (first != null) {
+                workspaceId = first.optString("id");
+                workspaceName =
+                    first.optString("name", "My Chat");
+            }
         }
     }
 
@@ -914,40 +1216,39 @@ public class MainActivity extends Activity {
             .apply();
     }
 
-    private void newWorkspace() {
+    private void newChat() {
         if (busy) {
-            Toast.makeText(
-                this,
-                "Stop the current response first",
-                Toast.LENGTH_SHORT
-            ).show();
+            toast("Stop the current response first");
             return;
         }
 
-        EditText nameInput = new EditText(this);
-        nameInput.setHint("Workspace name");
+        EditText name = new EditText(this);
+        name.setHint("Workspace name");
 
         new AlertDialog.Builder(this)
-            .setTitle("＋ New Workspace")
-            .setView(nameInput)
+            .setTitle("New Workspace")
+            .setView(name)
             .setPositiveButton("Create", (d, w) -> {
-                String name =
-                    nameInput.getText().toString().trim();
+                String value =
+                    name.getText().toString().trim();
 
-                if (name.isEmpty()) {
-                    name = "New Project";
+                if (value.isEmpty()) {
+                    value = "New Project";
                 }
-
-                workspaceId =
-                    "ws_" + System.currentTimeMillis();
-
-                workspaceName = name;
 
                 JSONObject item = new JSONObject();
 
                 try {
+                    workspaceId =
+                        "ws_" + System.currentTimeMillis();
+
+                    workspaceName = value;
+
                     item.put("id", workspaceId);
                     item.put("name", workspaceName);
+                    item.put("pinned", false);
+                    item.put("archived", false);
+
                     workspaces.put(item);
 
                 } catch (Exception ignored) {}
@@ -970,55 +1271,499 @@ public class MainActivity extends Activity {
             .show();
     }
 
-    private void showWorkspaces() {
+    private void switchWorkspace(JSONObject item) {
         if (busy) {
-            Toast.makeText(
-                this,
-                "Stop the current response first",
-                Toast.LENGTH_SHORT
-            ).show();
+            toast("Stop the current response first");
             return;
         }
 
-        String[] names =
-            new String[workspaces.length()];
+        if (item == null) return;
 
-        for (int i = 0; i < names.length; i++) {
+        workspaceId = item.optString("id");
+        workspaceName = item.optString("name");
+
+        prefs.edit()
+            .putString(
+                "active_workspace",
+                workspaceId
+            )
+            .apply();
+
+        loadHistory();
+        showHome();
+    }
+
+    private void updateWorkspace(
+        String id,
+        String key,
+        Object value
+    ) {
+        for (int i = 0; i < workspaces.length(); i++) {
             JSONObject item =
                 workspaces.optJSONObject(i);
 
-            names[i] = item == null
-                ? "Workspace"
-                : item.optString("name");
+            if (item == null) continue;
+
+            if (id.equals(item.optString("id"))) {
+                try {
+                    item.put(key, value);
+                } catch (Exception ignored) {}
+
+                saveWorkspaces();
+                return;
+            }
+        }
+    }
+
+    private void workspaceOptions(JSONObject item) {
+        if (item == null) return;
+
+        String id = item.optString("id");
+        String name = item.optString("name");
+
+        boolean pinned =
+            item.optBoolean("pinned", false);
+
+        boolean archived =
+            item.optBoolean("archived", false);
+
+        String[] options = {
+            pinned ? "Unpin" : "Pin",
+            "Rename",
+            archived ? "Unarchive" : "Archive",
+            "Delete"
+        };
+
+        new AlertDialog.Builder(this)
+            .setTitle(name)
+            .setItems(options, (d, which) -> {
+                if (which == 0) {
+                    updateWorkspace(
+                        id,
+                        "pinned",
+                        !pinned
+                    );
+
+                    openSidebar();
+
+                } else if (which == 1) {
+                    renameWorkspace(id, name);
+
+                } else if (which == 2) {
+                    updateWorkspace(
+                        id,
+                        "archived",
+                        !archived
+                    );
+
+                    openSidebar();
+
+                } else {
+                    deleteWorkspace(id, name);
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void renameWorkspace(
+        String id,
+        String oldName
+    ) {
+        EditText editor = new EditText(this);
+        editor.setText(oldName);
+
+        new AlertDialog.Builder(this)
+            .setTitle("Rename Workspace")
+            .setView(editor)
+            .setPositiveButton("Save", (d, w) -> {
+                String value =
+                    editor.getText().toString().trim();
+
+                if (value.isEmpty()) return;
+
+                updateWorkspace(id, "name", value);
+
+                if (workspaceId.equals(id)) {
+                    workspaceName = value;
+                }
+
+                showHome();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void deleteWorkspace(
+        String id,
+        String name
+    ) {
+        if (busy) {
+            toast("Stop the response first");
+            return;
         }
 
         new AlertDialog.Builder(this)
-            .setTitle("📁 My Workspaces")
-            .setItems(names, (d, which) -> {
-                JSONObject item =
-                    workspaces.optJSONObject(which);
+            .setTitle("Delete Workspace?")
+            .setMessage(
+                "Delete \"" + name + "\" and its saved chat history?\n\n"
+                + "This cannot be undone."
+            )
+            .setPositiveButton("Delete", (d, w) -> {
+                JSONArray updated = new JSONArray();
 
-                if (item == null) return;
+                for (int i = 0;
+                     i < workspaces.length();
+                     i++) {
 
-                workspaceId = item.optString("id");
-                workspaceName = item.optString("name");
+                    JSONObject item =
+                        workspaces.optJSONObject(i);
+
+                    if (item == null) continue;
+
+                    if (!id.equals(
+                        item.optString("id")
+                    )) {
+                        updated.put(item);
+                    }
+                }
+
+                workspaces = updated;
 
                 prefs.edit()
-                    .putString(
-                        "active_workspace",
-                        workspaceId
-                    )
+                    .remove("history_" + id)
                     .apply();
 
-                loadHistory();
+                if (workspaces.length() == 0) {
+                    JSONObject fresh = new JSONObject();
+
+                    try {
+                        fresh.put("id", "default");
+                        fresh.put("name", "My Chat");
+                        fresh.put("pinned", false);
+                        fresh.put("archived", false);
+
+                        workspaces.put(fresh);
+
+                    } catch (Exception ignored) {}
+                }
+
+                saveWorkspaces();
+
+                if (workspaceId.equals(id)) {
+                    JSONObject first =
+                        workspaces.optJSONObject(0);
+
+                    if (first != null) {
+                        workspaceId =
+                            first.optString("id");
+
+                        workspaceName =
+                            first.optString("name");
+
+                        prefs.edit()
+                            .putString(
+                                "active_workspace",
+                                workspaceId
+                            )
+                            .apply();
+
+                        loadHistory();
+                    }
+                }
+
                 showHome();
             })
-            .setPositiveButton(
-                "＋ New Workspace",
-                (d, w) -> newWorkspace()
-            )
-            .setNegativeButton("Close", null)
+            .setNegativeButton("Cancel", null)
             .show();
+    }
+
+    private void addSidebarItem(
+        LinearLayout container,
+        String title,
+        Runnable action
+    ) {
+        TextView item = text(
+            title,
+            16,
+            WHITE
+        );
+
+        item.setPadding(
+            dp(18),
+            dp(13),
+            dp(12),
+            dp(13)
+        );
+
+        container.addView(item);
+
+        item.setOnClickListener(v -> {
+            closeSidebar();
+            action.run();
+        });
+    }
+
+    private void openSidebar() {
+        if (sidebarOpen) {
+            closeSidebar();
+            return;
+        }
+
+        sidebarOpen = true;
+
+        sidebarShade = new View(this);
+        sidebarShade.setBackgroundColor(
+            Color.argb(160, 0, 0, 0)
+        );
+
+        screen.addView(
+            sidebarShade,
+            new FrameLayout.LayoutParams(
+                -1,
+                -1
+            )
+        );
+
+        sidebarShade.setOnClickListener(
+            v -> closeSidebar()
+        );
+
+        sidebar = vertical();
+        sidebar.setBackgroundColor(CARD);
+
+        int width = Math.min(
+            dp(310),
+            getResources()
+                .getDisplayMetrics()
+                .widthPixels * 85 / 100
+        );
+
+        FrameLayout.LayoutParams sideParams =
+            new FrameLayout.LayoutParams(
+                width,
+                -1,
+                Gravity.LEFT
+            );
+
+        screen.addView(sidebar, sideParams);
+
+        sidebar.setTranslationX(-width);
+
+        sidebar.animate()
+            .translationX(0)
+            .setDuration(220)
+            .start();
+
+        TextView heading = text(
+            "J.A.R.V.I.S",
+            23,
+            CYAN
+        );
+
+        heading.setTypeface(null, Typeface.BOLD);
+
+        heading.setPadding(
+            dp(18),
+            dp(28),
+            dp(12),
+            dp(20)
+        );
+
+        sidebar.addView(heading);
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout list = vertical();
+
+        scroll.addView(list);
+
+        sidebar.addView(
+            scroll,
+            new LinearLayout.LayoutParams(
+                -1,
+                0,
+                1
+            )
+        );
+
+        addSidebarItem(
+            list,
+            "💬 Chat",
+            () -> showHome()
+        );
+
+        addSidebarItem(
+            list,
+            "＋ New Workspace",
+            () -> newChat()
+        );
+
+        TextView wsHeading = text(
+            "WORKSPACES",
+            12,
+            GRAY
+        );
+
+        wsHeading.setPadding(
+            dp(18),
+            dp(18),
+            dp(10),
+            dp(8)
+        );
+
+        list.addView(wsHeading);
+
+        addWorkspaceRows(list, true);
+        addWorkspaceRows(list, false);
+
+        TextView tools = text(
+            "AI TOOLS",
+            12,
+            GRAY
+        );
+
+        tools.setPadding(
+            dp(18),
+            dp(22),
+            dp(10),
+            dp(8)
+        );
+
+        list.addView(tools);
+
+        addSidebarItem(
+            list,
+            "🎨 AI Image Studio",
+            () -> showFeature("AI Image Studio")
+        );
+
+        addSidebarItem(
+            list,
+            "🎬 AI Video Studio",
+            () -> showFeature("AI Video Studio")
+        );
+
+        addSidebarItem(
+            list,
+            "📱 Create App",
+            () -> showFeature("Create App")
+        );
+
+        addSidebarItem(
+            list,
+            "🎮 Create Game",
+            () -> showFeature("Create Game")
+        );
+
+        addSidebarItem(
+            list,
+            "👁 Live Screen",
+            () -> showFeature("Live Screen")
+        );
+
+        addSidebarItem(
+            list,
+            "🔗 Connected Apps",
+            () -> showFeature("Connected Apps")
+        );
+
+        addSidebarItem(
+            list,
+            "⚙ Settings",
+            () -> showSettings()
+        );
+
+        TextView help = text(
+            "Tip: Long press a workspace to Pin, Rename, Archive or Delete.",
+            12,
+            GRAY
+        );
+
+        help.setPadding(
+            dp(18),
+            dp(12),
+            dp(18),
+            dp(24)
+        );
+
+        sidebar.addView(help);
+    }
+
+    private void addWorkspaceRows(
+        LinearLayout list,
+        boolean pinnedOnly
+    ) {
+        for (int i = 0; i < workspaces.length(); i++) {
+            JSONObject item =
+                workspaces.optJSONObject(i);
+
+            if (item == null) continue;
+
+            boolean pinned =
+                item.optBoolean("pinned", false);
+
+            if (pinned != pinnedOnly) continue;
+
+            String name = item.optString("name");
+            boolean archived =
+                item.optBoolean("archived", false);
+
+            String prefix = archived
+                ? "📦 "
+                : pinned ? "📌 " : "📁 ";
+
+            TextView row = text(
+                prefix + name,
+                15,
+                archived ? GRAY : WHITE
+            );
+
+            row.setSingleLine(true);
+
+            row.setEllipsize(
+                android.text.TextUtils.TruncateAt.END
+            );
+
+            row.setPadding(
+                dp(22),
+                dp(12),
+                dp(10),
+                dp(12)
+            );
+
+            list.addView(row);
+
+            row.setOnClickListener(v -> {
+                if (!archived) {
+                    closeSidebar();
+                    switchWorkspace(item);
+                } else {
+                    workspaceOptions(item);
+                }
+            });
+
+            row.setOnLongClickListener(v -> {
+                closeSidebar();
+                workspaceOptions(item);
+                return true;
+            });
+        }
+    }
+
+    private void closeSidebar() {
+        if (!sidebarOpen) return;
+
+        sidebarOpen = false;
+
+        if (sidebar != null) {
+            screen.removeView(sidebar);
+            sidebar = null;
+        }
+
+        if (sidebarShade != null) {
+            screen.removeView(sidebarShade);
+            sidebarShade = null;
+        }
     }
 
     private void selectMode() {
@@ -1029,7 +1774,7 @@ public class MainActivity extends Activity {
         };
 
         new AlertDialog.Builder(this)
-            .setTitle("Choose AI Mode")
+            .setTitle("AI Mode")
             .setItems(options, (d, which) -> {
                 if (which == 0) mode = "FAST";
                 if (which == 1) mode = "DEEP";
@@ -1039,97 +1784,17 @@ public class MainActivity extends Activity {
                     .putString("ai_mode", mode)
                     .apply();
 
-                modeButton.setText("◉ " + mode);
+                showHome();
             })
             .show();
     }
 
-    private void showMainMenu() {
-        String[] options = {
-            "💬 Chat",
-            "📁 My Workspaces",
-            "🎨 AI Image Studio",
-            "🎬 AI Video Studio",
-            "📱 Create App",
-            "🎮 Create Game",
-            "👁 Live Screen",
-            "🔗 Connected Apps",
-            "⚙ Settings"
-        };
-
+    private void showFeature(String name) {
         new AlertDialog.Builder(this)
-            .setTitle("J.A.R.V.I.S CONTROL")
-            .setItems(options, (d, which) -> {
-                switch (which) {
-                    case 0:
-                        showHome();
-                        break;
-
-                    case 1:
-                        showWorkspaces();
-                        break;
-
-                    case 2:
-                        showFeature(
-                            "AI Image Studio",
-                            "Image generation and Character Lock"
-                        );
-                        break;
-
-                    case 3:
-                        showFeature(
-                            "AI Video Studio",
-                            "Video creation, dubbing and editing"
-                        );
-                        break;
-
-                    case 4:
-                        showFeature(
-                            "Create App",
-                            "GitHub AI App Builder"
-                        );
-                        break;
-
-                    case 5:
-                        showFeature(
-                            "Create Game",
-                            "AI Game Development Studio"
-                        );
-                        break;
-
-                    case 6:
-                        showFeature(
-                            "Live Screen",
-                            "Screen sharing and AI guidance"
-                        );
-                        break;
-
-                    case 7:
-                        showFeature(
-                            "Connected Apps",
-                            "Connect supported AI services"
-                        );
-                        break;
-
-                    case 8:
-                        showSettings();
-                        break;
-                }
-            })
-            .show();
-    }
-
-    private void showFeature(
-        String title,
-        String description
-    ) {
-        new AlertDialog.Builder(this)
-            .setTitle(title)
+            .setTitle(name)
             .setMessage(
-                description
-                + "\n\nThis feature is planned "
-                + "for a future JARVIS update. "
-                + "It is not active yet."
+                "This feature is planned for a future update.\n\n"
+                + "It is not active in JARVIS V4 yet."
             )
             .setPositiveButton("OK", null)
             .show();
@@ -1145,14 +1810,12 @@ public class MainActivity extends Activity {
         };
 
         new AlertDialog.Builder(this)
-            .setTitle("Attach File")
+            .setTitle("Attach to JARVIS")
             .setItems(options, (d, which) -> {
-                Toast.makeText(
-                    this,
-                    "File understanding is coming "
-                    + "in a future update.",
-                    Toast.LENGTH_LONG
-                ).show();
+                toast(
+                    "File upload will be added "
+                    + "in a future update."
+                );
             })
             .setNegativeButton("Cancel", null)
             .show();
@@ -1160,11 +1823,17 @@ public class MainActivity extends Activity {
 
     private void showSettings() {
         LinearLayout panel = vertical();
-        panel.setPadding(25, 10, 25, 10);
 
-        TextView note = label(
-            "Enter your private Gemini API key. "
-            + "Do not share it in screenshots or GitHub.",
+        panel.setPadding(
+            dp(22),
+            dp(10),
+            dp(22),
+            dp(10)
+        );
+
+        TextView note = text(
+            "Your Gemini API key is stored locally. "
+            + "Never share it or put it in public GitHub code.",
             14,
             Color.DKGRAY
         );
@@ -1183,7 +1852,7 @@ public class MainActivity extends Activity {
         panel.addView(keyInput);
 
         new AlertDialog.Builder(this)
-            .setTitle("⚙ JARVIS Settings")
+            .setTitle("JARVIS Settings")
             .setView(panel)
             .setPositiveButton("Save", (d, w) -> {
                 String key =
@@ -1194,11 +1863,7 @@ public class MainActivity extends Activity {
                         .putString("gemini_key", key)
                         .apply();
 
-                    Toast.makeText(
-                        this,
-                        "API key saved",
-                        Toast.LENGTH_SHORT
-                    ).show();
+                    toast("API key saved");
                 }
             })
             .setNegativeButton("Cancel", null)
@@ -1207,11 +1872,7 @@ public class MainActivity extends Activity {
 
     private void startVoice() {
         if (busy) {
-            Toast.makeText(
-                this,
-                "Stop current response first",
-                Toast.LENGTH_SHORT
-            ).show();
+            toast("Stop the response first");
             return;
         }
 
@@ -1241,11 +1902,7 @@ public class MainActivity extends Activity {
             );
 
         } catch (Exception e) {
-            Toast.makeText(
-                this,
-                "Voice input is unavailable",
-                Toast.LENGTH_SHORT
-            ).show();
+            toast("Voice input unavailable");
         }
     }
 
@@ -1279,8 +1936,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void toast(String message) {
+        Toast.makeText(
+            this,
+            message,
+            Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (sidebarOpen) {
+            closeSidebar();
+        } else {
+            super.onBackPressed();
+        }
+    }
+
     @Override
     protected void onDestroy() {
+        requestToken++;
+
         if (activeConnection != null) {
             activeConnection.disconnect();
         }
