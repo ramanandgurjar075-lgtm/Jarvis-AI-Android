@@ -5,22 +5,24 @@ import android.app.AlertDialog;
 import android.os.Bundle;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.ContentResolver;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+import android.database.Cursor;
 import android.speech.RecognizerIntent;
 import android.speech.tts.TextToSpeech;
 import android.text.InputType;
+import android.util.Base64;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
-import android.view.MotionEvent;
-import android.view.animation.AlphaAnimation;
+import android.view.WindowManager;
 import android.widget.*;
 import android.animation.ObjectAnimator;
-import android.animation.AnimatorSet;
 import android.animation.ValueAnimator;
-import android.util.TypedValue;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -40,12 +42,16 @@ public class MainActivity extends Activity {
         "gemini-3.1-flash-lite";
 
     private static final int VOICE_REQUEST = 101;
+    private static final int IMAGE_REQUEST = 102;
+
+    private static final int MAX_IMAGE_BYTES =
+        8 * 1024 * 1024;
 
     private final int BG = Color.rgb(5, 9, 18);
     private final int CARD = Color.rgb(20, 29, 45);
     private final int CYAN = Color.rgb(0, 215, 255);
     private final int WHITE = Color.WHITE;
-    private final int GRAY = Color.rgb(150, 160, 180);
+    private final int GRAY = Color.rgb(150, 165, 185);
 
     private SharedPreferences prefs;
 
@@ -53,8 +59,13 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private LinearLayout messages;
     private ScrollView chatScroll;
+
     private EditText input;
     private TextView sendButton;
+    private TextView imageIndicator;
+
+    private LinearLayout sidebar;
+    private View sidebarShade;
 
     private JSONArray history = new JSONArray();
     private JSONArray workspaces = new JSONArray();
@@ -62,6 +73,10 @@ public class MainActivity extends Activity {
     private String workspaceId = "default";
     private String workspaceName = "My Chat";
     private String mode = "FAST";
+
+    private String pendingImageBase64 = null;
+    private String pendingImageMime = null;
+    private String pendingImageName = null;
 
     private boolean busy = false;
     private boolean voiceReply = false;
@@ -72,9 +87,6 @@ public class MainActivity extends Activity {
     private Thread requestThread;
     private HttpURLConnection activeConnection;
     private TextToSpeech tts;
-
-    private LinearLayout sidebar;
-    private View sidebarShade;
 
     private int dp(float value) {
         return (int) TypedValue.applyDimension(
@@ -87,6 +99,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+
+        getWindow().setSoftInputMode(
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        );
 
         prefs = getSharedPreferences(
             "jarvis_private",
@@ -122,16 +138,6 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    private GradientDrawable glowingShape() {
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.OVAL);
-
-        d.setColor(Color.rgb(3, 30, 48));
-        d.setStroke(dp(3), CYAN);
-
-        return d;
-    }
-
     private TextView text(
         String value,
         int size,
@@ -144,14 +150,10 @@ public class MainActivity extends Activity {
         return t;
     }
 
-    private TextView iconButton(String value) {
-        TextView b = text(value, 21, WHITE);
+    private TextView icon(String value) {
+        TextView b = text(value, 20, WHITE);
         b.setGravity(Gravity.CENTER);
-
-        b.setBackground(
-            shape(CARD, 25)
-        );
-
+        b.setBackground(shape(CARD, 24));
         return b;
     }
 
@@ -168,6 +170,14 @@ public class MainActivity extends Activity {
         return l;
     }
 
+    private void toast(String value) {
+        Toast.makeText(
+            this,
+            value,
+            Toast.LENGTH_SHORT
+        ).show();
+    }
+
     private void setupScreen() {
         screen = new FrameLayout(this);
         screen.setBackgroundColor(BG);
@@ -176,10 +186,7 @@ public class MainActivity extends Activity {
 
         screen.addView(
             root,
-            new FrameLayout.LayoutParams(
-                -1,
-                -1
-            )
+            new FrameLayout.LayoutParams(-1, -1)
         );
 
         setContentView(screen);
@@ -190,20 +197,21 @@ public class MainActivity extends Activity {
         setupScreen();
 
         LinearLayout header = horizontal();
+
         header.setPadding(
             dp(12),
             dp(10),
             dp(12),
-            dp(10)
+            dp(8)
         );
 
-        TextView menu = iconButton("☰");
+        TextView menu = icon("☰");
 
         header.addView(
             menu,
             new LinearLayout.LayoutParams(
-                dp(46),
-                dp(46)
+                dp(44),
+                dp(44)
             )
         );
 
@@ -218,31 +226,32 @@ public class MainActivity extends Activity {
         title.setTypeface(null, Typeface.BOLD);
         title.setGravity(Gravity.CENTER_VERTICAL);
 
-        LinearLayout.LayoutParams titleParams =
+        LinearLayout.LayoutParams tp =
             new LinearLayout.LayoutParams(
                 0,
-                dp(46),
+                dp(44),
                 1
             );
 
-        titleParams.leftMargin = dp(14);
-        header.addView(title, titleParams);
+        tp.leftMargin = dp(14);
+        header.addView(title, tp);
 
-        TextView newChat = iconButton("＋");
+        TextView newChat = icon("＋");
 
         header.addView(
             newChat,
             new LinearLayout.LayoutParams(
-                dp(46),
-                dp(46)
+                dp(44),
+                dp(44)
             )
         );
 
-        newChat.setOnClickListener(v -> newChat());
+        newChat.setOnClickListener(v -> newWorkspace());
 
         root.addView(header);
 
         LinearLayout info = horizontal();
+
         info.setPadding(
             dp(18),
             0,
@@ -257,9 +266,6 @@ public class MainActivity extends Activity {
         );
 
         project.setSingleLine(true);
-        project.setEllipsize(
-            android.text.TextUtils.TruncateAt.END
-        );
 
         info.addView(
             project,
@@ -272,30 +278,29 @@ public class MainActivity extends Activity {
 
         project.setOnClickListener(v -> openSidebar());
 
-        TextView modeView = text(
-            "◉ " + mode + "  ⌄",
+        TextView modeButton = text(
+            "◉ " + mode + " ⌄",
             13,
             CYAN
         );
 
-        modeView.setPadding(
+        modeButton.setPadding(
             dp(12),
             dp(8),
             dp(12),
             dp(8)
         );
 
-        modeView.setBackground(shape(CARD, 18));
+        modeButton.setBackground(shape(CARD, 18));
 
-        info.addView(modeView);
+        info.addView(modeButton);
 
-        modeView.setOnClickListener(v -> selectMode());
+        modeButton.setOnClickListener(v -> selectMode());
 
         root.addView(info);
 
         chatScroll = new ScrollView(this);
         chatScroll.setFillViewport(true);
-        chatScroll.setClipToPadding(false);
 
         messages = vertical();
 
@@ -303,7 +308,7 @@ public class MainActivity extends Activity {
             dp(14),
             dp(12),
             dp(14),
-            dp(16)
+            dp(18)
         );
 
         chatScroll.addView(messages);
@@ -327,86 +332,66 @@ public class MainActivity extends Activity {
     }
 
     private void showWelcome() {
-        FrameLayout center = new FrameLayout(this);
+        LinearLayout welcome = vertical();
 
-        LinearLayout.LayoutParams areaParams =
+        welcome.setGravity(Gravity.CENTER);
+
+        welcome.setPadding(
+            dp(10),
+            dp(100),
+            dp(10),
+            dp(30)
+        );
+
+        FrameLayout coreBox = new FrameLayout(this);
+
+        LinearLayout.LayoutParams cp =
             new LinearLayout.LayoutParams(
-                -1,
-                0,
-                1
+                dp(112),
+                dp(112)
             );
 
-        messages.addView(center, areaParams);
-
-        LinearLayout content = vertical();
-        content.setGravity(Gravity.CENTER);
-
-        FrameLayout.LayoutParams cp =
-            new FrameLayout.LayoutParams(
-                -1,
-                -2,
-                Gravity.CENTER
-            );
-
-        center.addView(content, cp);
-
-        FrameLayout coreContainer =
-            new FrameLayout(this);
-
-        LinearLayout.LayoutParams coreParams =
-            new LinearLayout.LayoutParams(
-                dp(115),
-                dp(115)
-            );
-
-        coreParams.gravity = Gravity.CENTER;
-        content.addView(coreContainer, coreParams);
+        cp.gravity = Gravity.CENTER;
+        welcome.addView(coreBox, cp);
 
         View glow = new View(this);
-        glow.setBackground(glowingShape());
 
-        FrameLayout.LayoutParams glowParams =
+        GradientDrawable glowShape =
+            new GradientDrawable();
+
+        glowShape.setShape(GradientDrawable.OVAL);
+
+        glowShape.setColor(
+            Color.rgb(3, 30, 48)
+        );
+
+        glowShape.setStroke(dp(3), CYAN);
+
+        glow.setBackground(glowShape);
+
+        coreBox.addView(
+            glow,
             new FrameLayout.LayoutParams(
-                dp(88),
-                dp(88),
+                dp(95),
+                dp(95),
                 Gravity.CENTER
-            );
+            )
+        );
 
-        coreContainer.addView(glow, glowParams);
-
-        TextView coreSymbol = text(
+        TextView core = text(
             "⬡",
             73,
             CYAN
         );
 
-        coreSymbol.setGravity(Gravity.CENTER);
+        core.setGravity(Gravity.CENTER);
 
-        coreContainer.addView(
-            coreSymbol,
-            new FrameLayout.LayoutParams(
-                -1,
-                -1
-            )
+        coreBox.addView(
+            core,
+            new FrameLayout.LayoutParams(-1, -1)
         );
 
-        ObjectAnimator pulseX =
-            ObjectAnimator.ofFloat(
-                glow,
-                "scaleX",
-                0.85f,
-                1.15f
-            );
-
-        ObjectAnimator pulseY =
-            ObjectAnimator.ofFloat(
-                glow,
-                "scaleY",
-                0.85f,
-                1.15f
-            );
-
-        ObjectAnimator alpha =
+        ObjectAnimator pulse =
             ObjectAnimator.ofFloat(
                 glow,
                 "alpha",
@@ -414,69 +399,49 @@ public class MainActivity extends Activity {
                 1f
             );
 
-        pulseX.setRepeatCount(
+        pulse.setDuration(1700);
+
+        pulse.setRepeatCount(
             ValueAnimator.INFINITE
         );
 
-        pulseY.setRepeatCount(
-            ValueAnimator.INFINITE
-        );
-
-        alpha.setRepeatCount(
-            ValueAnimator.INFINITE
-        );
-
-        pulseX.setRepeatMode(
+        pulse.setRepeatMode(
             ValueAnimator.REVERSE
         );
 
-        pulseY.setRepeatMode(
-            ValueAnimator.REVERSE
-        );
+        pulse.start();
 
-        alpha.setRepeatMode(
-            ValueAnimator.REVERSE
-        );
+        coreBox.setOnClickListener(v -> startVoice());
 
-        AnimatorSet animation = new AnimatorSet();
-
-        animation.playTogether(
-            pulseX,
-            pulseY,
-            alpha
-        );
-
-        animation.setDuration(1800);
-        animation.start();
-
-        coreContainer.setOnClickListener(v -> startVoice());
-
-        TextView greeting = text(
+        TextView heading = text(
             "How can I help you?",
             22,
             WHITE
         );
 
-        greeting.setTypeface(null, Typeface.BOLD);
-        greeting.setGravity(Gravity.CENTER);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setGravity(Gravity.CENTER);
 
-        greeting.setPadding(
+        heading.setPadding(
             0,
             dp(20),
             0,
             dp(8)
         );
 
-        content.addView(greeting);
+        welcome.addView(heading);
 
         TextView subtitle = text(
-            "Your personal AI assistant",
+            "Your Personal AI Assistant",
             14,
             GRAY
         );
 
         subtitle.setGravity(Gravity.CENTER);
-        content.addView(subtitle);
+
+        welcome.addView(subtitle);
+
+        messages.addView(welcome);
     }
 
     private void createComposer() {
@@ -484,20 +449,42 @@ public class MainActivity extends Activity {
 
         outer.setPadding(
             dp(10),
-            dp(8),
+            dp(6),
             dp(10),
-            dp(12)
+            dp(10)
         );
 
         LinearLayout box = vertical();
-        box.setBackground(shape(CARD, 26));
+
+        box.setBackground(shape(CARD, 25));
 
         box.setPadding(
             dp(10),
-            dp(5),
+            dp(7),
             dp(10),
-            dp(5)
+            dp(7)
         );
+
+        imageIndicator = text("", 13, CYAN);
+
+        imageIndicator.setVisibility(
+            pendingImageBase64 == null
+                ? View.GONE
+                : View.VISIBLE
+        );
+
+        if (pendingImageBase64 != null) {
+            imageIndicator.setText(
+                "🖼 " + pendingImageName + "  ✕"
+            );
+        }
+
+        box.addView(imageIndicator);
+
+        imageIndicator.setOnClickListener(v -> {
+            clearPendingImage();
+            updateImageIndicator();
+        });
 
         input = new EditText(this);
 
@@ -509,7 +496,7 @@ public class MainActivity extends Activity {
         input.setBackgroundColor(Color.TRANSPARENT);
 
         input.setMinLines(1);
-        input.setMaxLines(4);
+        input.setMaxLines(5);
 
         input.setInputType(
             InputType.TYPE_CLASS_TEXT |
@@ -518,11 +505,11 @@ public class MainActivity extends Activity {
 
         box.addView(input);
 
-        LinearLayout controls = horizontal();
+        LinearLayout actions = horizontal();
 
-        TextView attach = iconButton("＋");
+        TextView attach = icon("＋");
 
-        controls.addView(
+        actions.addView(
             attach,
             new LinearLayout.LayoutParams(
                 dp(44),
@@ -534,18 +521,18 @@ public class MainActivity extends Activity {
 
         View spacer = new View(this);
 
-        controls.addView(
+        actions.addView(
             spacer,
             new LinearLayout.LayoutParams(
                 0,
-                dp(1),
+                1,
                 1
             )
         );
 
-        TextView mic = iconButton("🎙");
+        TextView mic = icon("🎙");
 
-        controls.addView(
+        actions.addView(
             mic,
             new LinearLayout.LayoutParams(
                 dp(44),
@@ -555,13 +542,13 @@ public class MainActivity extends Activity {
 
         mic.setOnClickListener(v -> startVoice());
 
-        sendButton = iconButton("➤");
+        sendButton = icon("➤");
         sendButton.setTextColor(CYAN);
 
-        controls.addView(
+        actions.addView(
             sendButton,
             new LinearLayout.LayoutParams(
-                dp(58),
+                dp(55),
                 dp(44)
             )
         );
@@ -569,21 +556,90 @@ public class MainActivity extends Activity {
         sendButton.setOnClickListener(v -> {
             if (busy) {
                 stopRequest();
-            } else {
-                String message =
-                    input.getText().toString().trim();
+                return;
+            }
 
-                if (!message.isEmpty()) {
-                    voiceReply = false;
-                    input.setText("");
-                    sendMessage(message);
-                }
+            String message =
+                input.getText().toString().trim();
+
+            if (message.isEmpty() &&
+                pendingImageBase64 != null) {
+
+                message =
+                    "Describe and analyze this image.";
+            }
+
+            if (!message.isEmpty()) {
+                voiceReply = false;
+                input.setText("");
+                sendMessage(message);
             }
         });
 
-        box.addView(controls);
+        box.addView(actions);
+
         outer.addView(box);
         root.addView(outer);
+    }
+
+    private void updateImageIndicator() {
+        if (imageIndicator == null) return;
+
+        if (pendingImageBase64 == null) {
+            imageIndicator.setVisibility(View.GONE);
+        } else {
+            imageIndicator.setVisibility(View.VISIBLE);
+
+            imageIndicator.setText(
+                "🖼 " + pendingImageName + "  ✕"
+            );
+        }
+    }
+
+    private void clearPendingImage() {
+        pendingImageBase64 = null;
+        pendingImageMime = null;
+        pendingImageName = null;
+    }
+
+    private JSONObject makeMessage(
+        String role,
+        String value
+    ) {
+        JSONObject item = new JSONObject();
+
+        try {
+            JSONArray parts = new JSONArray();
+
+            JSONObject part = new JSONObject();
+            part.put("text", value);
+
+            parts.put(part);
+
+            item.put("role", role);
+            item.put("parts", parts);
+
+        } catch (Exception ignored) {}
+
+        return item;
+    }
+
+    private String messageText(JSONObject item) {
+        if (item == null) return "";
+
+        JSONArray parts = item.optJSONArray("parts");
+
+        if (parts == null ||
+            parts.length() == 0) {
+
+            return "";
+        }
+
+        JSONObject part = parts.optJSONObject(0);
+
+        return part == null
+            ? ""
+            : part.optString("text");
     }
 
     private void addBubble(
@@ -615,7 +671,7 @@ public class MainActivity extends Activity {
         bubble.setBackground(
             shape(
                 user
-                    ? Color.rgb(0, 70, 105)
+                    ? Color.rgb(0, 75, 110)
                     : CARD,
                 20
             )
@@ -635,7 +691,6 @@ public class MainActivity extends Activity {
         );
 
         line.addView(bubble, p);
-
         messages.addView(line);
 
         if (user && index >= 0) {
@@ -650,44 +705,6 @@ public class MainActivity extends Activity {
         );
     }
 
-    private JSONObject makeMessage(
-        String role,
-        String value
-    ) {
-        JSONObject item = new JSONObject();
-
-        try {
-            JSONObject part = new JSONObject();
-            part.put("text", value);
-
-            JSONArray parts = new JSONArray();
-            parts.put(part);
-
-            item.put("role", role);
-            item.put("parts", parts);
-
-        } catch (Exception ignored) {}
-
-        return item;
-    }
-
-    private String messageText(JSONObject item) {
-        if (item == null) return "";
-
-        JSONArray parts = item.optJSONArray("parts");
-
-        if (parts == null ||
-            parts.length() == 0) {
-            return "";
-        }
-
-        JSONObject part = parts.optJSONObject(0);
-
-        return part == null
-            ? ""
-            : part.optString("text");
-    }
-
     private void renderHistory() {
         for (int i = 0; i < history.length(); i++) {
             JSONObject item =
@@ -696,7 +713,7 @@ public class MainActivity extends Activity {
             if (item == null) continue;
 
             boolean user =
-                item.optString("role").equals("user");
+                "user".equals(item.optString("role"));
 
             addBubble(
                 messageText(item),
@@ -748,42 +765,37 @@ public class MainActivity extends Activity {
         if (old == null) return;
 
         EditText editor = new EditText(this);
-
         editor.setText(messageText(old));
         editor.setMinLines(2);
 
         new AlertDialog.Builder(this)
-            .setTitle("✏ Edit Message")
+            .setTitle("Edit & Resend")
             .setView(editor)
-            .setPositiveButton(
-                "Save & Resend",
-                (d, w) -> {
-                    String changed =
-                        editor.getText()
-                            .toString()
-                            .trim();
+            .setPositiveButton("Resend", (d, w) -> {
+                String changed =
+                    editor.getText()
+                        .toString()
+                        .trim();
 
-                    if (changed.isEmpty()) return;
+                if (changed.isEmpty()) return;
 
-                    JSONArray revised =
-                        new JSONArray();
+                JSONArray revised = new JSONArray();
 
-                    for (int i = 0; i < index; i++) {
-                        JSONObject item =
-                            history.optJSONObject(i);
+                for (int i = 0; i < index; i++) {
+                    JSONObject item =
+                        history.optJSONObject(i);
 
-                        if (item != null) {
-                            revised.put(item);
-                        }
+                    if (item != null) {
+                        revised.put(item);
                     }
-
-                    history = revised;
-                    saveHistory();
-
-                    showHome();
-                    sendMessage(changed);
                 }
-            )
+
+                history = revised;
+                saveHistory();
+
+                showHome();
+                sendMessage(changed);
+            })
             .setNegativeButton("Cancel", null)
             .show();
     }
@@ -797,9 +809,18 @@ public class MainActivity extends Activity {
         );
 
         if (key.isEmpty()) {
-            toast("Save your Gemini API key first");
+            toast("Save Gemini API key first");
             showSettings();
             return;
+        }
+
+        final String imageData = pendingImageBase64;
+        final String imageMime = pendingImageMime;
+
+        String displayedMessage = message;
+
+        if (imageData != null) {
+            displayedMessage += "\n🖼 [Image attached]";
         }
 
         if (history.length() == 0) {
@@ -807,15 +828,24 @@ public class MainActivity extends Activity {
         }
 
         busy = true;
+
         sendButton.setText("■");
 
-        boolean shouldSpeak = voiceReply;
+        final boolean shouldSpeak = voiceReply;
         voiceReply = false;
 
-        int index = history.length();
+        final int index = history.length();
 
-        addHistory("user", message);
-        addBubble(message, true, index);
+        addHistory("user", displayedMessage);
+
+        addBubble(
+            displayedMessage,
+            true,
+            index
+        );
+
+        clearPendingImage();
+        updateImageIndicator();
 
         addBubble(
             "JARVIS is thinking...",
@@ -824,7 +854,9 @@ public class MainActivity extends Activity {
         );
 
         final int token = ++requestToken;
+
         final String selectedMode = mode;
+
         final String requestHistory = history.toString();
 
         requestThread = new Thread(() -> {
@@ -834,11 +866,13 @@ public class MainActivity extends Activity {
                 answer = callGemini(
                     key,
                     selectedMode,
-                    requestHistory
+                    requestHistory,
+                    imageData,
+                    imageMime
                 );
             } catch (Exception e) {
-                answer = "Connection problem: "
-                    + e.getMessage();
+                answer =
+                    "Connection problem: " + e.getMessage();
             }
 
             final String result = answer;
@@ -926,7 +960,9 @@ public class MainActivity extends Activity {
     private String callGemini(
         String key,
         String selectedMode,
-        String requestHistory
+        String requestHistory,
+        String imageData,
+        String imageMime
     ) throws Exception {
 
         URL url = new URL(
@@ -958,47 +994,49 @@ public class MainActivity extends Activity {
             );
 
             String instruction =
-                "You are JARVIS, a highly capable "
-                + "personal AI assistant. "
+                "You are JARVIS, an advanced personal "
+                + "AI assistant. "
                 + "Understand Hindi, Hinglish and English. "
                 + "Reply naturally in the user's language. "
-                + "Be helpful, accurate and practical. "
-                + "Do not blindly agree or flatter. "
-                + "Politely correct incorrect claims. "
+                + "Be accurate, practical and helpful. "
+                + "Never blindly agree or flatter. "
+                + "Politely correct incorrect statements. "
                 + "Keep normal replies concise. "
-                + "Explain step by step when requested. "
+                + "Give detailed steps when needed. "
                 + "Use earlier conversation as context. "
-                + "Help with apps, games, coding, "
-                + "stories, images, video planning "
-                + "and technical problems. "
-                + "Never claim to have completed "
-                + "actions that were not performed. ";
+                + "Help with coding, games, Android apps, "
+                + "stories, video creation and image prompts. "
+                + "When an image is attached, analyze its "
+                + "visible contents carefully. "
+                + "Do not invent details that are not visible. "
+                + "Never claim you generated an image, video "
+                + "or app unless you actually did. "
+                + "Prefer free tools where possible. ";
 
             if (selectedMode.equals("DEEP")) {
                 instruction +=
-                    "Analyze complex problems carefully. "
-                    + "Compare options and limitations. ";
+                    "Consider complex problems carefully. "
+                    + "Explain relevant limitations. ";
             }
 
             if (selectedMode.equals("TRUTH")) {
                 instruction +=
                     "Prioritize accuracy. "
-                    + "Check your reasoning for errors. "
+                    + "Check reasoning for contradictions. "
                     + "State uncertainty clearly. "
-                    + "Never invent citations or "
-                    + "pretend to verify external sources. ";
+                    + "Never invent citations or claim "
+                    + "external verification without tools. ";
             }
 
             JSONObject body = new JSONObject();
 
             JSONObject system = new JSONObject();
-            JSONObject part = new JSONObject();
-
-            part.put("text", instruction);
-
             JSONArray systemParts = new JSONArray();
-            systemParts.put(part);
 
+            JSONObject systemPart = new JSONObject();
+            systemPart.put("text", instruction);
+
+            systemParts.put(systemPart);
             system.put("parts", systemParts);
 
             body.put("systemInstruction", system);
@@ -1010,14 +1048,54 @@ public class MainActivity extends Activity {
 
             int start = Math.max(
                 0,
-                all.length() - 30
+                all.length() - 20
             );
 
             for (int i = start; i < all.length(); i++) {
-                JSONObject item = all.optJSONObject(i);
+                JSONObject item =
+                    all.optJSONObject(i);
 
                 if (item != null) {
                     recent.put(item);
+                }
+            }
+
+            if (imageData != null &&
+                recent.length() > 0) {
+
+                JSONObject last =
+                    recent.optJSONObject(
+                        recent.length() - 1
+                    );
+
+                if (last != null) {
+                    JSONArray parts =
+                        last.optJSONArray("parts");
+
+                    if (parts != null) {
+                        JSONObject imagePart =
+                            new JSONObject();
+
+                        JSONObject inline =
+                            new JSONObject();
+
+                        inline.put(
+                            "mime_type",
+                            imageMime
+                        );
+
+                        inline.put(
+                            "data",
+                            imageData
+                        );
+
+                        imagePart.put(
+                            "inline_data",
+                            inline
+                        );
+
+                        parts.put(imagePart);
+                    }
                 }
             }
 
@@ -1032,8 +1110,15 @@ public class MainActivity extends Activity {
                     "minimal"
                 );
 
-                config.put("thinkingConfig", thinking);
-                body.put("generationConfig", config);
+                config.put(
+                    "thinkingConfig",
+                    thinking
+                );
+
+                body.put(
+                    "generationConfig",
+                    config
+                );
             }
 
             byte[] data =
@@ -1043,6 +1128,7 @@ public class MainActivity extends Activity {
 
             try (OutputStream out =
                      conn.getOutputStream()) {
+
                 out.write(data);
             }
 
@@ -1095,6 +1181,7 @@ public class MainActivity extends Activity {
 
             if (candidates == null ||
                 candidates.length() == 0) {
+
                 return "Gemini error: No response.";
             }
 
@@ -1145,6 +1232,150 @@ public class MainActivity extends Activity {
             if (activeConnection == conn) {
                 activeConnection = null;
             }
+        }
+    }
+
+    private void showAttachments() {
+        String[] options = {
+            "🖼 Choose Photo / Screenshot",
+            "📷 Camera — Later Update",
+            "📄 PDF / Documents — Later Update",
+            "🎬 Video — Later Update",
+            "🎵 Audio File — Later Update"
+        };
+
+        new AlertDialog.Builder(this)
+            .setTitle("Attach to JARVIS")
+            .setItems(options, (d, which) -> {
+                if (which == 0) {
+                    chooseImage();
+                } else {
+                    toast(
+                        "This file type is not supported yet"
+                    );
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void chooseImage() {
+        if (busy) {
+            toast("Stop current response first");
+            return;
+        }
+
+        Intent intent = new Intent(
+            Intent.ACTION_OPEN_DOCUMENT
+        );
+
+        intent.setType("image/*");
+
+        intent.addCategory(
+            Intent.CATEGORY_OPENABLE
+        );
+
+        startActivityForResult(
+            intent,
+            IMAGE_REQUEST
+        );
+    }
+
+    private void handleSelectedImage(Uri uri) {
+        if (uri == null) return;
+
+        try {
+            ContentResolver resolver =
+                getContentResolver();
+
+            String mime = resolver.getType(uri);
+
+            if (mime == null ||
+                !mime.startsWith("image/")) {
+
+                toast("Please select an image");
+                return;
+            }
+
+            String name = "Selected Image";
+
+            Cursor cursor = resolver.query(
+                uri,
+                null,
+                null,
+                null,
+                null
+            );
+
+            if (cursor != null) {
+                try {
+                    if (cursor.moveToFirst()) {
+                        int index = cursor.getColumnIndex(
+                            OpenableColumns.DISPLAY_NAME
+                        );
+
+                        if (index >= 0) {
+                            name = cursor.getString(index);
+                        }
+                    }
+                } finally {
+                    cursor.close();
+                }
+            }
+
+            ByteArrayOutputStream bytes =
+                new ByteArrayOutputStream();
+
+            try (InputStream in =
+                     resolver.openInputStream(uri)) {
+
+                if (in == null) {
+                    toast("Cannot open image");
+                    return;
+                }
+
+                byte[] buffer = new byte[8192];
+                int count;
+
+                while ((count = in.read(buffer)) != -1) {
+                    if (bytes.size() + count >
+                        MAX_IMAGE_BYTES) {
+
+                        toast(
+                            "Image too large. Maximum 8 MB."
+                        );
+
+                        return;
+                    }
+
+                    bytes.write(buffer, 0, count);
+                }
+            }
+
+            if (bytes.size() == 0) {
+                toast("Image is empty");
+                return;
+            }
+
+            pendingImageBase64 =
+                Base64.encodeToString(
+                    bytes.toByteArray(),
+                    Base64.NO_WRAP
+                );
+
+            pendingImageMime = mime;
+            pendingImageName = name;
+
+            updateImageIndicator();
+
+            toast(
+                "Image attached. Ask JARVIS about it."
+            );
+
+        } catch (Exception e) {
+            toast(
+                "Image error: " + e.getMessage()
+            );
         }
     }
 
@@ -1200,11 +1431,20 @@ public class MainActivity extends Activity {
                 workspaces.optJSONObject(0);
 
             if (first != null) {
-                workspaceId = first.optString("id");
+                workspaceId =
+                    first.optString("id", "default");
+
                 workspaceName =
                     first.optString("name", "My Chat");
             }
         }
+
+        prefs.edit()
+            .putString(
+                "active_workspace",
+                workspaceId
+            )
+            .apply();
     }
 
     private void saveWorkspaces() {
@@ -1216,36 +1456,34 @@ public class MainActivity extends Activity {
             .apply();
     }
 
-    private void newChat() {
+    private void newWorkspace() {
         if (busy) {
-            toast("Stop the current response first");
+            toast("Stop the response first");
             return;
         }
 
-        EditText name = new EditText(this);
-        name.setHint("Workspace name");
+        EditText editor = new EditText(this);
+        editor.setHint("Workspace name");
 
         new AlertDialog.Builder(this)
             .setTitle("New Workspace")
-            .setView(name)
+            .setView(editor)
             .setPositiveButton("Create", (d, w) -> {
-                String value =
-                    name.getText().toString().trim();
+                String name =
+                    editor.getText().toString().trim();
 
-                if (value.isEmpty()) {
-                    value = "New Project";
+                if (name.isEmpty()) {
+                    name = "New Project";
                 }
+
+                String id =
+                    "ws_" + System.currentTimeMillis();
 
                 JSONObject item = new JSONObject();
 
                 try {
-                    workspaceId =
-                        "ws_" + System.currentTimeMillis();
-
-                    workspaceName = value;
-
-                    item.put("id", workspaceId);
-                    item.put("name", workspaceName);
+                    item.put("id", id);
+                    item.put("name", name);
                     item.put("pinned", false);
                     item.put("archived", false);
 
@@ -1255,6 +1493,9 @@ public class MainActivity extends Activity {
 
                 saveWorkspaces();
 
+                workspaceId = id;
+                workspaceName = name;
+
                 prefs.edit()
                     .putString(
                         "active_workspace",
@@ -1263,8 +1504,9 @@ public class MainActivity extends Activity {
                     .apply();
 
                 history = new JSONArray();
-                saveHistory();
 
+                clearPendingImage();
+                saveHistory();
                 showHome();
             })
             .setNegativeButton("Cancel", null)
@@ -1273,7 +1515,7 @@ public class MainActivity extends Activity {
 
     private void switchWorkspace(JSONObject item) {
         if (busy) {
-            toast("Stop the current response first");
+            toast("Stop the response first");
             return;
         }
 
@@ -1288,6 +1530,8 @@ public class MainActivity extends Activity {
                 workspaceId
             )
             .apply();
+
+        clearPendingImage();
 
         loadHistory();
         showHome();
@@ -1344,7 +1588,7 @@ public class MainActivity extends Activity {
                         !pinned
                     );
 
-                    openSidebar();
+                    refreshSidebar();
 
                 } else if (which == 1) {
                     renameWorkspace(id, name);
@@ -1356,7 +1600,7 @@ public class MainActivity extends Activity {
                         !archived
                     );
 
-                    openSidebar();
+                    refreshSidebar();
 
                 } else {
                     deleteWorkspace(id, name);
@@ -1406,7 +1650,8 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
             .setTitle("Delete Workspace?")
             .setMessage(
-                "Delete \"" + name + "\" and its saved chat history?\n\n"
+                "Delete \"" + name
+                + "\" and its saved chat history?\n\n"
                 + "This cannot be undone."
             )
             .setPositiveButton("Delete", (d, w) -> {
@@ -1472,6 +1717,7 @@ public class MainActivity extends Activity {
                     }
                 }
 
+                clearPendingImage();
                 showHome();
             })
             .setNegativeButton("Cancel", null)
@@ -1479,15 +1725,11 @@ public class MainActivity extends Activity {
     }
 
     private void addSidebarItem(
-        LinearLayout container,
+        LinearLayout list,
         String title,
         Runnable action
     ) {
-        TextView item = text(
-            title,
-            16,
-            WHITE
-        );
+        TextView item = text(title, 16, WHITE);
 
         item.setPadding(
             dp(18),
@@ -1496,7 +1738,7 @@ public class MainActivity extends Activity {
             dp(13)
         );
 
-        container.addView(item);
+        list.addView(item);
 
         item.setOnClickListener(v -> {
             closeSidebar();
@@ -1513,16 +1755,14 @@ public class MainActivity extends Activity {
         sidebarOpen = true;
 
         sidebarShade = new View(this);
+
         sidebarShade.setBackgroundColor(
-            Color.argb(160, 0, 0, 0)
+            Color.argb(165, 0, 0, 0)
         );
 
         screen.addView(
             sidebarShade,
-            new FrameLayout.LayoutParams(
-                -1,
-                -1
-            )
+            new FrameLayout.LayoutParams(-1, -1)
         );
 
         sidebarShade.setOnClickListener(
@@ -1539,14 +1779,14 @@ public class MainActivity extends Activity {
                 .widthPixels * 85 / 100
         );
 
-        FrameLayout.LayoutParams sideParams =
+        screen.addView(
+            sidebar,
             new FrameLayout.LayoutParams(
                 width,
                 -1,
                 Gravity.LEFT
-            );
-
-        screen.addView(sidebar, sideParams);
+            )
+        );
 
         sidebar.setTranslationX(-width);
 
@@ -1565,7 +1805,7 @@ public class MainActivity extends Activity {
 
         heading.setPadding(
             dp(18),
-            dp(28),
+            dp(25),
             dp(12),
             dp(20)
         );
@@ -1573,6 +1813,7 @@ public class MainActivity extends Activity {
         sidebar.addView(heading);
 
         ScrollView scroll = new ScrollView(this);
+
         LinearLayout list = vertical();
 
         scroll.addView(list);
@@ -1595,7 +1836,7 @@ public class MainActivity extends Activity {
         addSidebarItem(
             list,
             "＋ New Workspace",
-            () -> newChat()
+            () -> newWorkspace()
         );
 
         TextView wsHeading = text(
@@ -1634,37 +1875,37 @@ public class MainActivity extends Activity {
         addSidebarItem(
             list,
             "🎨 AI Image Studio",
-            () -> showFeature("AI Image Studio")
+            () -> openTool("IMAGE")
         );
 
         addSidebarItem(
             list,
             "🎬 AI Video Studio",
-            () -> showFeature("AI Video Studio")
+            () -> openTool("VIDEO")
         );
 
         addSidebarItem(
             list,
             "📱 Create App",
-            () -> showFeature("Create App")
+            () -> openTool("APP")
         );
 
         addSidebarItem(
             list,
             "🎮 Create Game",
-            () -> showFeature("Create Game")
+            () -> openTool("GAME")
         );
 
         addSidebarItem(
             list,
             "👁 Live Screen",
-            () -> showFeature("Live Screen")
+            () -> showLiveScreen()
         );
 
         addSidebarItem(
             list,
             "🔗 Connected Apps",
-            () -> showFeature("Connected Apps")
+            () -> showConnectedApps()
         );
 
         addSidebarItem(
@@ -1674,7 +1915,7 @@ public class MainActivity extends Activity {
         );
 
         TextView help = text(
-            "Tip: Long press a workspace to Pin, Rename, Archive or Delete.",
+            "Long press a workspace to Pin, Rename, Archive or Delete.",
             12,
             GRAY
         );
@@ -1705,6 +1946,7 @@ public class MainActivity extends Activity {
             if (pinned != pinnedOnly) continue;
 
             String name = item.optString("name");
+
             boolean archived =
                 item.optBoolean("archived", false);
 
@@ -1720,10 +1962,6 @@ public class MainActivity extends Activity {
 
             row.setSingleLine(true);
 
-            row.setEllipsize(
-                android.text.TextUtils.TruncateAt.END
-            );
-
             row.setPadding(
                 dp(22),
                 dp(12),
@@ -1738,6 +1976,7 @@ public class MainActivity extends Activity {
                     closeSidebar();
                     switchWorkspace(item);
                 } else {
+                    closeSidebar();
                     workspaceOptions(item);
                 }
             });
@@ -1748,6 +1987,11 @@ public class MainActivity extends Activity {
                 return true;
             });
         }
+    }
+
+    private void refreshSidebar() {
+        closeSidebar();
+        openSidebar();
     }
 
     private void closeSidebar() {
@@ -1764,6 +2008,133 @@ public class MainActivity extends Activity {
             screen.removeView(sidebarShade);
             sidebarShade = null;
         }
+    }
+
+    private void openTool(String tool) {
+        if (busy) {
+            toast("Stop the response first");
+            return;
+        }
+
+        String title;
+        String prompt;
+
+        switch (tool) {
+            case "IMAGE":
+                title = "🎨 AI Image Studio";
+
+                prompt =
+                    "You are my AI Image Director. "
+                    + "Help me plan images for stories, "
+                    + "write detailed image prompts, "
+                    + "create character reference descriptions, "
+                    + "maintain character consistency, "
+                    + "and select correct expressions and poses. "
+                    + "Ask what image project I want to create.";
+
+                break;
+
+            case "VIDEO":
+                title = "🎬 AI Video Studio";
+
+                prompt =
+                    "You are my AI Video Director. "
+                    + "Help create stories, scripts, "
+                    + "storyboards, scene lists, image prompts, "
+                    + "video prompts, narration scripts, "
+                    + "and free-tool workflows. "
+                    + "Ask what kind of video I want.";
+
+                break;
+
+            case "APP":
+                title = "📱 Create App";
+
+                prompt =
+                    "You are my Android App Development Assistant. "
+                    + "Help me design and code Android apps "
+                    + "using GitHub and GitHub Actions. "
+                    + "Give complete working files and "
+                    + "help troubleshoot build errors. "
+                    + "Ask what app I want to build.";
+
+                break;
+
+            default:
+                title = "🎮 Create Game";
+
+                prompt =
+                    "You are my Game Development Assistant. "
+                    + "Help me build Android games, "
+                    + "starting with practical 2D projects. "
+                    + "Explain game design, source code, "
+                    + "assets and APK builds. "
+                    + "Ask what game I want.";
+                break;
+        }
+
+        final String initialPrompt = prompt;
+
+        new AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(
+                "Open this AI assistant in your current Workspace?\n\n"
+                + "JARVIS will help with planning and prompts. "
+                + "External generation and GitHub automation "
+                + "are not connected yet."
+            )
+            .setPositiveButton("Start", (d, w) -> {
+                showHome();
+                sendMessage(initialPrompt);
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showLiveScreen() {
+        new AlertDialog.Builder(this)
+            .setTitle("👁 Live Screen")
+            .setMessage(
+                "Live Screen Sharing is not active yet.\n\n"
+                + "A future update will use Android "
+                + "screen capture permission with "
+                + "Start, Pause and Stop controls.\n\n"
+                + "For now, use + to attach a screenshot "
+                + "and ask JARVIS to analyze it."
+            )
+            .setPositiveButton(
+                "Choose Screenshot",
+                (d, w) -> chooseImage()
+            )
+            .setNegativeButton("Close", null)
+            .show();
+    }
+
+    private void showConnectedApps() {
+        new AlertDialog.Builder(this)
+            .setTitle("🔗 Connected Apps")
+            .setMessage(
+                "External app and website automation "
+                + "requires a supported API or "
+                + "authorized Android integration.\n\n"
+                + "No external apps are connected yet.\n\n"
+                + "JARVIS can currently help plan "
+                + "workflows in chat."
+            )
+            .setPositiveButton(
+                "Ask JARVIS",
+                (d, w) -> {
+                    showHome();
+
+                    sendMessage(
+                        "Help me choose free AI tools "
+                        + "and plan an app or website "
+                        + "integration for my project."
+                    );
+                }
+            )
+            .setNegativeButton("Close", null)
+            .show();
     }
 
     private void selectMode() {
@@ -1789,38 +2160,6 @@ public class MainActivity extends Activity {
             .show();
     }
 
-    private void showFeature(String name) {
-        new AlertDialog.Builder(this)
-            .setTitle(name)
-            .setMessage(
-                "This feature is planned for a future update.\n\n"
-                + "It is not active in JARVIS V4 yet."
-            )
-            .setPositiveButton("OK", null)
-            .show();
-    }
-
-    private void showAttachments() {
-        String[] options = {
-            "📷 Camera",
-            "🖼 Photos",
-            "📄 Files / PDF",
-            "🎬 Video",
-            "🎵 Audio"
-        };
-
-        new AlertDialog.Builder(this)
-            .setTitle("Attach to JARVIS")
-            .setItems(options, (d, which) -> {
-                toast(
-                    "File upload will be added "
-                    + "in a future update."
-                );
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
-    }
-
     private void showSettings() {
         LinearLayout panel = vertical();
 
@@ -1832,8 +2171,8 @@ public class MainActivity extends Activity {
         );
 
         TextView note = text(
-            "Your Gemini API key is stored locally. "
-            + "Never share it or put it in public GitHub code.",
+            "Enter your private Gemini API key. "
+            + "Do not share it or put it in GitHub.",
             14,
             Color.DKGRAY
         );
@@ -1841,6 +2180,7 @@ public class MainActivity extends Activity {
         panel.addView(note);
 
         EditText keyInput = new EditText(this);
+
         keyInput.setHint("Gemini API Key");
         keyInput.setSingleLine(true);
 
@@ -1872,7 +2212,7 @@ public class MainActivity extends Activity {
 
     private void startVoice() {
         if (busy) {
-            toast("Stop the response first");
+            toast("Stop current response first");
             return;
         }
 
@@ -1918,10 +2258,18 @@ public class MainActivity extends Activity {
             data
         );
 
-        if (requestCode == VOICE_REQUEST &&
-            resultCode == RESULT_OK &&
-            data != null) {
+        if (resultCode != RESULT_OK ||
+            data == null) {
 
+            return;
+        }
+
+        if (requestCode == IMAGE_REQUEST) {
+            handleSelectedImage(data.getData());
+            return;
+        }
+
+        if (requestCode == VOICE_REQUEST) {
             ArrayList<String> results =
                 data.getStringArrayListExtra(
                     RecognizerIntent.EXTRA_RESULTS
@@ -1934,14 +2282,6 @@ public class MainActivity extends Activity {
                 sendMessage(results.get(0));
             }
         }
-    }
-
-    private void toast(String message) {
-        Toast.makeText(
-            this,
-            message,
-            Toast.LENGTH_SHORT
-        ).show();
     }
 
     @Override
