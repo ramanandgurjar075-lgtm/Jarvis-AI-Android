@@ -2106,31 +2106,232 @@ public class MainActivity extends Activity {
     }
 
     private void showConnectedApps() {
-        new AlertDialog.Builder(this)
-            .setTitle("🔗 Connected Apps")
-            .setMessage(
-                "External app and website automation "
-                + "requires a supported API or "
-                + "authorized Android integration.\n\n"
-                + "No external apps are connected yet.\n\n"
-                + "JARVIS can currently help plan "
-                + "workflows in chat."
-            )
-            .setPositiveButton(
-                "Ask JARVIS",
-                (d, w) -> {
-                    showHome();
+    String saved = prefs.getString("connected_apps", "[]");
+    JSONArray apps;
 
-                    sendMessage(
-                        "Help me choose free AI tools "
-                        + "and plan an app or website "
-                        + "integration for my project."
-                    );
-                }
-            )
-            .setNegativeButton("Close", null)
-            .show();
+    try {
+        apps = new JSONArray(saved);
+    } catch (Exception e) {
+        apps = new JSONArray();
     }
+
+    final JSONArray appList = apps;
+
+    LinearLayout panel = vertical();
+    panel.setPadding(dp(18), dp(12), dp(18), dp(12));
+
+    TextView heading = text(
+        "CONNECTED APPS MANAGER",
+        18,
+        CYAN
+    );
+    panel.addView(heading);
+
+    TextView info = text(
+        "Manage your apps and websites.\n"
+        + "Saved entries are not automatic AI connections.",
+        13,
+        GRAY
+    );
+    info.setPadding(0, dp(10), 0, dp(14));
+    panel.addView(info);
+
+    TextView add = text(
+        "+ Add App / Website",
+        17,
+        CYAN
+    );
+    add.setPadding(dp(12), dp(14), dp(12), dp(14));
+    add.setBackground(shape(CARD, 16));
+    panel.addView(add);
+
+    add.setOnClickListener(v -> addConnectedApp());
+
+    if (appList.length() == 0) {
+        TextView empty = text(
+            "No apps or websites added yet.",
+            15,
+            GRAY
+        );
+        empty.setPadding(0, dp(22), 0, dp(12));
+        panel.addView(empty);
+    }
+
+    for (int i = 0; i < appList.length(); i++) {
+        JSONObject app = appList.optJSONObject(i);
+        if (app == null) continue;
+
+        String name = app.optString("name", "App");
+        String url = app.optString("url", "");
+
+        TextView item = text(
+            "🔗 " + name + "\n"
+            + url + "\n"
+            + "Status: Saved (not authenticated)",
+            14,
+            WHITE
+        );
+
+        item.setPadding(
+            dp(12), dp(14), dp(12), dp(14)
+        );
+        item.setBackground(shape(CARD, 14));
+
+        LinearLayout.LayoutParams params =
+            new LinearLayout.LayoutParams(-1, -2);
+        params.setMargins(0, dp(10), 0, 0);
+
+        panel.addView(item, params);
+
+        final int index = i;
+
+        item.setOnClickListener(v -> {
+            new AlertDialog.Builder(this)
+                .setTitle(name)
+                .setItems(
+                    new String[]{
+                        "Open Website",
+                        "Delete Entry"
+                    },
+                    (dialog, which) -> {
+                        if (which == 0) {
+                            try {
+                                if (!url.startsWith("https://")
+                                    && !url.startsWith("http://")) {
+                                    toast("Invalid website URL");
+                                    return;
+                                }
+
+                                Intent intent = new Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse(url)
+                                );
+                                startActivity(intent);
+
+                            } catch (Exception e) {
+                                toast("Cannot open website");
+                            }
+                        } else {
+                            deleteConnectedApp(index);
+                        }
+                    }
+                )
+                .setNegativeButton("Cancel", null)
+                .show();
+        });
+    }
+
+    ScrollView scroll = new ScrollView(this);
+    scroll.addView(panel);
+
+    new AlertDialog.Builder(this)
+        .setTitle("🔗 Connected Apps")
+        .setView(scroll)
+        .setPositiveButton("Close", null)
+        .show();
+}
+
+private void addConnectedApp() {
+    LinearLayout form = vertical();
+    form.setPadding(dp(20), dp(10), dp(20), dp(10));
+
+    EditText nameInput = new EditText(this);
+    nameInput.setHint("App / Website Name");
+    nameInput.setSingleLine(true);
+    form.addView(nameInput);
+
+    EditText urlInput = new EditText(this);
+    urlInput.setHint("https://example.com");
+    urlInput.setSingleLine(true);
+    urlInput.setInputType(
+        InputType.TYPE_CLASS_TEXT |
+        InputType.TYPE_TEXT_VARIATION_URI
+    );
+    form.addView(urlInput);
+
+    new AlertDialog.Builder(this)
+        .setTitle("Add App / Website")
+        .setView(form)
+        .setPositiveButton("Save", (dialog, which) -> {
+            String name = nameInput.getText()
+                .toString().trim();
+
+            String url = urlInput.getText()
+                .toString().trim();
+
+            if (name.isEmpty() || url.isEmpty()) {
+                toast("Enter name and website URL");
+                return;
+            }
+
+            if (!url.startsWith("https://")
+                && !url.startsWith("http://")) {
+                toast("URL must start with https://");
+                return;
+            }
+
+            try {
+                JSONArray apps = new JSONArray(
+                    prefs.getString("connected_apps", "[]")
+                );
+
+                JSONObject app = new JSONObject();
+                app.put("name", name);
+                app.put("url", url);
+
+                apps.put(app);
+
+                prefs.edit()
+                    .putString(
+                        "connected_apps",
+                        apps.toString()
+                    )
+                    .apply();
+
+                toast("Entry saved");
+            } catch (Exception e) {
+                toast("Save failed");
+            }
+        })
+        .setNegativeButton("Cancel", null)
+        .show();
+}
+
+private void deleteConnectedApp(int index) {
+    new AlertDialog.Builder(this)
+        .setTitle("Delete Entry?")
+        .setMessage(
+            "Remove this app/website from JARVIS?"
+        )
+        .setPositiveButton("Delete", (dialog, which) -> {
+            try {
+                JSONArray oldApps = new JSONArray(
+                    prefs.getString("connected_apps", "[]")
+                );
+
+                JSONArray updated = new JSONArray();
+
+                for (int i = 0; i < oldApps.length(); i++) {
+                    if (i != index) {
+                        updated.put(oldApps.get(i));
+                    }
+                }
+
+                prefs.edit()
+                    .putString(
+                        "connected_apps",
+                        updated.toString()
+                    )
+                    .apply();
+
+                toast("Entry deleted");
+            } catch (Exception e) {
+                toast("Delete failed");
+            }
+        })
+        .setNegativeButton("Cancel", null)
+        .show();
+                                        }
 
     private void selectMode() {
         String[] options = {
