@@ -179,17 +179,42 @@ public class MainActivity extends Activity {
     }
 
     private void setupScreen() {
-        screen = new FrameLayout(this);
-        screen.setBackgroundColor(BG);
+    screen = new FrameLayout(this);
+    screen.setBackgroundColor(BG);
 
-        root = vertical();
+    root = vertical();
 
-        screen.addView(
-            root,
-            new FrameLayout.LayoutParams(-1, -1)
+    screen.addView(
+        root,
+        new FrameLayout.LayoutParams(-1, -1)
+    );
+
+    setContentView(screen);
+
+    // Android 16: detect keyboard and adjust chat layout
+    screen.setOnApplyWindowInsetsListener((view, insets) -> {
+        android.graphics.Insets ime = insets.getInsets(
+            android.view.WindowInsets.Type.ime()
         );
 
-        setContentView(screen);
+        android.graphics.Insets bars = insets.getInsets(
+            android.view.WindowInsets.Type.systemBars()
+        );
+
+        boolean keyboardOpen = insets.isVisible(
+            android.view.WindowInsets.Type.ime()
+        );
+
+        int bottomPadding = keyboardOpen
+            ? Math.max(0, ime.bottom - bars.bottom)
+            : 0;
+
+        root.setPadding(0, 0, 0, bottomPadding);
+
+        return insets;
+    });
+
+    screen.requestApplyInsets();
     }
 
     private void showHome() {
