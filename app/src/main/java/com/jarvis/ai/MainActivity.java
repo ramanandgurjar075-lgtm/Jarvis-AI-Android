@@ -469,29 +469,15 @@ public class MainActivity extends Activity {
         messages.addView(welcome);
     }
 
-    private void createComposer() {
+      private void createComposer() {
         LinearLayout outer = vertical();
-
-        outer.setPadding(
-            dp(10),
-            dp(6),
-            dp(10),
-            dp(10)
-        );
+        outer.setPadding(dp(8), dp(4), dp(8), dp(8));
 
         LinearLayout box = vertical();
+        box.setBackground(shape(CARD, 28));
+        box.setPadding(dp(8), dp(4), dp(8), dp(4));
 
-        box.setBackground(shape(CARD, 25));
-
-        box.setPadding(
-            dp(10),
-            dp(7),
-            dp(10),
-            dp(7)
-        );
-
-        imageIndicator = text("", 13, CYAN);
-
+        imageIndicator = text("", 12, CYAN);
         imageIndicator.setVisibility(
             pendingImageBase64 == null
                 ? View.GONE
@@ -504,6 +490,7 @@ public class MainActivity extends Activity {
             );
         }
 
+        imageIndicator.setPadding(dp(8), dp(3), dp(8), dp(3));
         box.addView(imageIndicator);
 
         imageIndicator.setOnClickListener(v -> {
@@ -511,71 +498,57 @@ public class MainActivity extends Activity {
             updateImageIndicator();
         });
 
-        input = new EditText(this);
+        LinearLayout row = horizontal();
 
+        TextView attach = text("+", 28, WHITE);
+        attach.setGravity(Gravity.CENTER);
+
+        row.addView(
+            attach,
+            new LinearLayout.LayoutParams(dp(38), dp(44))
+        );
+
+        attach.setOnClickListener(v -> showAttachments());
+
+        input = new EditText(this);
         input.setHint("Message JARVIS...");
         input.setHintTextColor(GRAY);
         input.setTextColor(WHITE);
-
-        input.setTextSize(16);
+        input.setTextSize(15);
         input.setBackgroundColor(Color.TRANSPARENT);
 
+        input.setSingleLine(false);
         input.setMinLines(1);
-        input.setMaxLines(5);
+        input.setMaxLines(3);
+
+        input.setPadding(dp(5), 0, dp(5), 0);
 
         input.setInputType(
             InputType.TYPE_CLASS_TEXT |
             InputType.TYPE_TEXT_FLAG_MULTI_LINE
         );
 
-        box.addView(input);
+        LinearLayout.LayoutParams inputParams =
+            new LinearLayout.LayoutParams(0, -2, 1);
 
-        LinearLayout actions = horizontal();
+        row.addView(input, inputParams);
 
-        TextView attach = icon("＋");
+        TextView mic = text("🎙", 22, WHITE);
+        mic.setGravity(Gravity.CENTER);
 
-        actions.addView(
-            attach,
-            new LinearLayout.LayoutParams(
-                dp(44),
-                dp(44)
-            )
-        );
-
-        attach.setOnClickListener(v -> showAttachments());
-
-        View spacer = new View(this);
-
-        actions.addView(
-            spacer,
-            new LinearLayout.LayoutParams(
-                0,
-                1,
-                1
-            )
-        );
-
-        TextView mic = icon("🎙");
-
-        actions.addView(
+        row.addView(
             mic,
-            new LinearLayout.LayoutParams(
-                dp(44),
-                dp(44)
-            )
+            new LinearLayout.LayoutParams(dp(42), dp(44))
         );
 
         mic.setOnClickListener(v -> startVoice());
 
-        sendButton = icon("➤");
-        sendButton.setTextColor(CYAN);
+        sendButton = text("➤", 25, CYAN);
+        sendButton.setGravity(Gravity.CENTER);
 
-        actions.addView(
+        row.addView(
             sendButton,
-            new LinearLayout.LayoutParams(
-                dp(55),
-                dp(44)
-            )
+            new LinearLayout.LayoutParams(dp(42), dp(44))
         );
 
         sendButton.setOnClickListener(v -> {
@@ -589,9 +562,7 @@ public class MainActivity extends Activity {
 
             if (message.isEmpty() &&
                 pendingImageBase64 != null) {
-
-                message =
-                    "Describe and analyze this image.";
+                message = "Describe and analyze this image.";
             }
 
             if (!message.isEmpty()) {
@@ -601,11 +572,10 @@ public class MainActivity extends Activity {
             }
         });
 
-        box.addView(actions);
-
+        box.addView(row);
         outer.addView(box);
         root.addView(outer);
-    }
+      }  
 
     private void updateImageIndicator() {
         if (imageIndicator == null) return;
