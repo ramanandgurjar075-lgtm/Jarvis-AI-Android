@@ -1902,7 +1902,11 @@ public class MainActivity extends Activity {
             "🔗 Connected Apps",
             () -> showConnectedApps()
         );
-
+addSidebarItem(
+    list,
+    "🐙 GitHub Developer",
+    () -> showGitHubManager()
+);
         addSidebarItem(
             list,
             "⚙ Settings",
@@ -2504,4 +2508,125 @@ private void deleteConnectedApp(int index) {
 
         super.onDestroy();
     }
+    private void showGitHubManager() {
+    String username = prefs.getString("github_username", "");
+
+    LinearLayout panel = vertical();
+    panel.setPadding(dp(20), dp(12), dp(20), dp(12));
+
+    TextView title = text(
+        "GITHUB DEVELOPER",
+        20,
+        CYAN
+    );
+    panel.addView(title);
+
+    TextView info = text(
+        "GitHub Account: "
+        + (username.isEmpty() ? "Not configured" : username)
+        + "\n\n"
+        + "Manage repositories and Android projects."
+        + "\nGitHub account verification does not grant"
+        + " permission to modify repositories.",
+        14,
+        GRAY
+    );
+
+    info.setPadding(0, dp(12), 0, dp(18));
+    panel.addView(info);
+
+    TextView connect = text(
+        "🔗 Set GitHub Username",
+        16,
+        CYAN
+    );
+    connect.setPadding(dp(12), dp(15), dp(12), dp(15));
+    connect.setBackground(shape(CARD, 15));
+    panel.addView(connect);
+
+    connect.setOnClickListener(v -> {
+        EditText input = new EditText(this);
+        input.setHint("GitHub username");
+        input.setSingleLine(true);
+        input.setText(
+            prefs.getString("github_username", "")
+        );
+
+        new AlertDialog.Builder(this)
+            .setTitle("GitHub Account")
+            .setView(input)
+            .setPositiveButton("Save", (d, w) -> {
+                String value = input.getText()
+                    .toString().trim();
+
+                if (value.isEmpty()) {
+                    toast("Enter GitHub username");
+                    return;
+                }
+
+                prefs.edit()
+                    .putString("github_username", value)
+                    .apply();
+
+                toast("Username saved");
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    });
+
+    TextView repositories = text(
+        "📁 View GitHub Repositories",
+        16,
+        CYAN
+    );
+    repositories.setPadding(
+        dp(12), dp(15), dp(12), dp(15)
+    );
+
+    panel.addView(repositories);
+
+    repositories.setOnClickListener(v -> {
+        String user = prefs.getString(
+            "github_username", ""
+        );
+
+        if (user.isEmpty()) {
+            toast("Set GitHub username first");
+            return;
+        }
+
+        try {
+            Intent intent = new Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse(
+                    "https://github.com/"
+                    + Uri.encode(user)
+                    + "?tab=repositories"
+                )
+            );
+            startActivity(intent);
+        } catch (Exception e) {
+            toast("Cannot open GitHub");
+        }
+    });
+
+    TextView status = text(
+        "STATUS\n"
+        + "Account authorization: Not connected\n"
+        + "Repository write access: Not connected\n"
+        + "AI Coding Agent: Not enabled\n"
+        + "APK Build Automation: Not enabled",
+        13,
+        GRAY
+    );
+
+    status.setPadding(0, dp(20), 0, 0);
+    panel.addView(status);
+
+    new AlertDialog.Builder(this)
+        .setTitle("🐙 GitHub Manager")
+        .setView(panel)
+        .setPositiveButton("Close", null)
+        .show();
+        }
 }
