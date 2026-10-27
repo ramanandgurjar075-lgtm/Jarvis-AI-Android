@@ -2643,14 +2643,264 @@ githubConnect.setOnClickListener(v -> {
         .show();
         }
     private void openGitHubAuthorization() {
-    new AlertDialog.Builder(this)
-        .setTitle("GitHub Connection")
-        .setMessage(
-            "GitHub se secure connection ke liye " +
-            "OAuth authorization zaroori hai.\n\n" +
-            "Abhi GitHub account connected nahi hai."
-        )
-        .setPositiveButton("OK", null)
-        .show();
+    String existing = prefs.getString("github_token", "");
+
+    if (!existing.isEmpty()) {
+        new AlertDialog.Builder(this)
+            .setTitle("GitHub Connection")
+            .setMessage("GitHub authorization saved hai.")
+            .setPositiveButton("Disconnect", (d, w) -> {
+                prefs.edit()
+                    .remove("github_token")
+                    .remove("github_connected_user")
+                    .apply();
+                toast("GitHub disconnected locally");
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+        return;
+    }
+
+    toast("Starting GitHub authorization...");
+
+    new Thread(() -> {
+        try {
+            String response = githubPost(
+                "https://github.com/login/device/code",
+                "client_id=Ov23lin0LG53N2ij9Ua3"
+                    + "&scope=repo%20workflow"
+            );
+
+            org.json.JSONObject data =
+                new org.json.JSONObject(response);
+
+            if (!data.has("device_code")) {
+                throw new Exception(response);
+            }
+
+            String deviceCode = data.getString("device_code");
+            String userCode = data.getString("user_code");
+
+            String verificationUrl = data.optString(
+                "verification_uri",
+                "https://github.com/login/device"
+            );
+
+            int interval = Math.max(
+                5,
+                data.optInt("interval", 5)
+            );
+
+            long expiresAt = System.currentTimeMillis()
+                + data.optLong("expires_in", 900) * 1000L;
+
+            runOnUiThread(() -> {
+                new AlertDialog.Builder(this)
+                    .setTitle("Connect GitHub")
+                    .setMessage(
+                        "GitHub verification code:\n\n"
+                        + userCode
+                        + "\n\nCode copy ya note kar lo."
+                        + "\n\nOpen GitHub dabao aur "
+                        + "wahan ye code enter karke "
+                        + "JARVIS ko authorize karo."
+                    )
+                    .setPositiveButton("Open GitHub", (d, w) -> {
+                        try {
+                            startActivity(new Intent(
+                                Intent.ACTION_VIEW,
+                                Uri.parse(verificationUrl)
+                            ));
+                        } catch (Exception e) {
+                            toast("Cannot open GitHub");
+                        }
+                    })
+                    .setNegativeButton("Close", null)
+                    .show();
+            });
+
+            int waitSeconds = interval;
+
+            while (System.currentTimeMillis() < expiresAt) {
+                Thread.sleep(waitSeconds * 1000L);
+
+                String tokenResponse = githubPost(
+                    "https://github.com/login/oauth/access_token",
+                    "client_id=Ov23lin0LG53N2ij9Ua3"
+                        + "&device_code="
+                        + java.net.URLEncoder.encode(
+                            deviceCode, "UTF-8"
+                        )
+                        + "&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+                );
+
+                org.json.JSONObject tokenData =
+                    new org.json.JSONObject(tokenResponse);
+
+                if (tokenData.has("access_token")) {
+                    String token =
+                        tokenData.getString("access_token");
+
+                    String userResponse = githubGetUser(token);
+
+                    org.json.JSONObject userData =
+                        new org.json.JSONObject(userResponse);
+
+                    String login = userData.getString("login");
+
+                    prefs.edit()
+                        .putString("github_token", token)
+                        .putString("github_connected_user", login)
+                        .apply();
+
+                    runOnUiThread(() -> {
+                        new AlertDialog.Builder(this)
+                            .setTitle("GitHub Connected")
+                            .setMessage(
+                                "Authorized account:\n"
+                                + login
+                                + "\n\nGitHub authorization successful."
+                            )
+                            .setPositiveButton("OK", null)
+                            .show();
+                    });
+                    return;
+                }
+
+                String error =
+                    tokenData.optString("error", "");
+
+                if ("slow_down".equals(error)) {
+                    waitSeconds += 5;
+                } else if ("authorization_pending".equals(error)) {
+                    // Keep waiting for browser authorization.
+                } else if ("expired_token".equals(error)
+                        || "access_denied".equals(error)) {
+                    throw new Exception(error);
+                } else if (!error.isEmpty()) {
+                    throw new Exception(error);
+                }
+            }
+
+            throw new Exception("Authorization timed out");
+
+        } catch (Exception e) {
+            runOnUiThread(() ->
+                new AlertDialog.Builder(this)
+                    .setTitle("GitHub Login Failed")
+                    .setMessage(e.getMessage())
+                    .setPositiveButton("OK", null)
+                    .show()
+            );
+        }
+    }).start();
+}
+
+private String githubPost(
+    String url,
+    String form
+) throws Exception {
+    java.net.HttpURLConnection connection =
+        (java.net.HttpURLConnection)
+            new java.net.URL(url).openConnection();
+
+    try {
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(15000);
+        connection.setDoOutput(true);
+        connection.setRequestProperty(
+            "Accept", "application/json"
+        );
+        connection.setRequestProperty(
+            "Content-Type",
+            "application/x-www-form-urlencoded"
+        );
+
+        try (java.io.OutputStream output =
+                 connection.getOutputStream()) {
+            output.write(
+                form.getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8
+                )
+            );
+        }
+
+        int code = connection.getResponseCode();
+
+        java.io.InputStream stream =
+            code >= 400
+                ? connection.getErrorStream()
+                : connection.getInputStream();
+
+        if (stream == null) {
+            throw new Exception("GitHub HTTP " + code);
+        }
+
+        try (java.io.InputStream input = stream;
+             java.util.Scanner scanner =
+                 new java.util.Scanner(input, "UTF-8")
+                     .useDelimiter("\\A")) {
+
+            String body =
+                scanner.hasNext() ? scanner.next() : "";
+
+            if (code >= 400) {
+                throw new Exception(
+                    "GitHub HTTP " + code + ": " + body
+                );
+            }
+
+            return body;
+        }
+    } finally {
+        connection.disconnect();
+    }
+}
+
+private String githubGetUser(
+    String token
+) throws Exception {
+    java.net.HttpURLConnection connection =
+        (java.net.HttpURLConnection)
+            new java.net.URL(
+                "https://api.github.com/user"
+            ).openConnection();
+
+    try {
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(15000);
+        connection.setRequestProperty(
+            "Accept", "application/vnd.github+json"
+        );
+        connection.setRequestProperty(
+            "Authorization", "Bearer " + token
+        );
+        connection.setRequestProperty(
+            "X-GitHub-Api-Version", "2022-11-28"
+        );
+
+        int code = connection.getResponseCode();
+
+        if (code != 200) {
+            throw new Exception(
+                "GitHub account verification failed: " + code
+            );
+        }
+
+        try (java.io.InputStream input =
+                 connection.getInputStream();
+             java.util.Scanner scanner =
+                 new java.util.Scanner(input, "UTF-8")
+                     .useDelimiter("\\A")) {
+
+            return scanner.hasNext()
+                ? scanner.next()
+                : "";
+        }
+    } finally {
+        connection.disconnect();
+    }
+            }
                            }
 }
