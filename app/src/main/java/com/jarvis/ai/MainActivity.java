@@ -2622,11 +2622,35 @@ private void deleteConnectedApp(int index) {
 
     status.setPadding(0, dp(20), 0, 0);
     panel.addView(status);
+TextView githubConnect = text(
+    "🔗 GitHub — Connect",
+    16,
+    CYAN
+);
+githubConnect.setPadding(
+    dp(12), dp(15), dp(12), dp(15)
+);
+githubConnect.setBackground(shape(CARD, 15));
+panel.addView(githubConnect);
 
+githubConnect.setOnClickListener(v -> {
+    openGitHubAuthorization();
+});
     new AlertDialog.Builder(this)
         .setTitle("🐙 GitHub Manager")
         .setView(panel)
         .setPositiveButton("Close", null)
         .show();
         }
+    private void openGitHubAuthorization() {
+    new AlertDialog.Builder(this)
+        .setTitle("GitHub Connection")
+        .setMessage(
+            "GitHub se secure connection ke liye " +
+            "OAuth authorization zaroori hai.\n\n" +
+            "Abhi GitHub account connected nahi hai."
+        )
+        .setPositiveButton("OK", null)
+        .show();
+                           }
 }
